@@ -6,12 +6,12 @@
 
 如果你是一个 AI 领域的初学者，或者是一位想要从传统的 Web 开发转型为 AI 应用开发的工程师，本项目将是你最好的起点。
 
-本项目演示了如何结合 **Milvus**（全球最流行的开源向量数据库）、**LangChain**（大模型应用开发框架）和 **DashScope**（通义千问大模型），构建一个**私有知识库问答系统**。
+本项目演示了如何结合 **ChromaDB**（轻量级开源向量数据库）、**LangChain**（大模型应用开发框架）和 **DashScope**（通义千问大模型），构建一个**私有知识库问答系统**。
 
 ### ✨ 你将收获什么？
 
 *   🎓 **从小白到入门**：用通俗易懂的语言理解 RAG、向量数据库、Embedding 等核心概念。
-*   🏗️ **完整的架构视野**：不只是代码片段，而是完整的前后端分离架构（Vue3 + Flask + Milvus）。
+*   🏗️ **完整的架构视野**：不只是代码片段，而是完整的前后端分离架构（Vue3 + Flask + ChromaDB）。
 *   🔍 **逐行代码拆解**：我们将像"逐字稿"一样，带你读懂核心代码，理解每一行背后的思考。
 *   🛠️ **实战技能**：掌握文档切分、向量存储、混合检索、Prompt 工程等 AI 开发必备技能。
 
@@ -29,23 +29,23 @@
     *   **RAG** 就像是给学霸发了一本**"开卷考试的参考书"**（你的私有文档）。
     *   当用户提问时，系统先去书里翻到相关的几页（检索），然后把这几页纸连同问题一起递给学霸。学霸结合书里的内容，就能回答出准确的、关于你公司的答案了。
 
-### 2. 什么是 Milvus (向量数据库)？
+### 2. 什么是 ChromaDB (向量数据库)？
 *   **通俗比喻**：
     *   如果说 MySQL 是**"Excel 表格"**，专门存结构化的行和列；
-    *   那么 Milvus 就是一个**"高维图书馆"**。它存储的不是具体的文字，而是文字的**"语义坐标"**。它能以毫秒级的速度，从数亿条数据中找到和你的问题"长得最像"（语义最接近）的那些片段。
+    *   那么 ChromaDB 就是一个**"高维图书馆"**。它存储的不是具体的文字，而是文字的**"语义坐标"**。它能以毫秒级的速度，从数亿条数据中找到和你的问题"长得最像"（语义最接近）的那些片段。
 
 ### 3. 什么是 Embedding (向量化)？
 *   **通俗比喻**：
     *   计算机不认识字，只认识数字。
     *   Embedding 就是一个**"翻译官"**，它把一段文字（如"苹果"）翻译成一串长长的数字列表（如 `[0.12, -0.56, 0.99, ...]`）。
-    *   神奇的是，在这个数字空间里，意思相近的词，距离会很近。比如"苹果"和"水果"的向量距离很近，但"苹果"和"汽车"的距离就很远。Milvus 就是靠计算这个距离来寻找答案的。
+    *   神奇的是，在这个数字空间里，意思相近的词，距离会很近。比如"苹果"和"水果"的向量距离很近，但"苹果"和"汽车"的距离就很远。ChromaDB 就是靠计算这个距离来寻找答案的。
 
 ---
 
 ## 🧩 系统架构与流程 (Architecture)
 
 ### 1. 数据入库流程 (Ingestion Pipeline)
-这是知识库的"消化系统"。我们将文档吃进去，嚼碎（切分），转化成营养（向量），存入身体（Milvus）。
+这是知识库的"消化系统"。我们将文档吃进去，嚼碎（切分），转化成营养（向量），存入身体（ChromaDB）。
 
 ```mermaid
 graph LR
@@ -54,7 +54,7 @@ graph LR
     C --> D["🧩 文档块 (Chunks)"]
     D --> E["🧠 Embedding Model (向量化模型)"]
     E --> F["🔢 向量 (Vectors)"]
-    F --> G[("💾 Milvus 数据库")]
+    F --> G[("💾 ChromaDB 数据库")]
 ```
 
 ### 2. 问答检索流程 (RAG Pipeline)
@@ -65,8 +65,8 @@ graph LR
     User["👤 用户提问"] --> Q("❓ 问题")
     Q --> Emb("🧠 Embedding (问题向量化)")
     Emb --> Search("🔍 向量相似度检索")
-    Search -->|Top-K 最相似| Milvus[("💾 Milvus")]
-    Milvus -->|返回| Docs["📄 相关文档片段"]
+    Search -->|Top-K 最相似| ChromaDB[("💾 ChromaDB")]
+    ChromaDB -->|返回| Docs["📄 相关文档片段"]
     Docs --> Context{"📑 构建 Prompt (问题+参考资料)"}
     Q --> Context
     Context --> LLM("🤖 大语言模型 (通义千问)")
@@ -88,6 +88,17 @@ npm run dev
 ```
 *访问 `http://localhost:5173` 即可看到聊天界面。*
 
+### 后端运行 (Backend)
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 运行服务
+python server.py
+```
+
+*服务将在 `http://localhost:5000` 启动，前端会自动调用后端API。*
+
 ---
 
 ## 🔍 核心代码深度拆解 (Deep Dive)
@@ -96,7 +107,7 @@ npm run dev
 
 ### 📝 第一部分：向量数据库大管家 (`vector_db_manager.py`)
 
-这个文件负责跟 Milvus 打交道，主要包含三个动作：**连接、切分、入库**。
+这个文件负责跟 ChromaDB 打交道，主要包含三个动作：**连接、切分、入库**。
 
 #### 1. 初始化与连接
 ```python
@@ -121,9 +132,9 @@ class VectorDatabaseManager:
             separators=["\n\n", "\n", "。", "！"] # 优先按段落切，再按句子切
         )
         
-        # 3. 连接 Milvus
-        # 建立与 Milvus 服务器的 TCP 连接
-        connections.connect("default", host=self.milvus_host, port=self.milvus_port)
+        # 3. 初始化 ChromaDB 客户端
+        # ChromaDB 作为嵌入式数据库，比 Milvus 更简单，无需独立服务
+        self._init_chroma_client()
 ```
 
 #### 2. 文档处理全流程 (`process_file`)
@@ -139,35 +150,38 @@ def process_file(self, file_path: str, collection_name: str = None) -> bool:
     split_docs = self.split_documents(documents)
     
     # 第三步：入库 (Store)
-    # 最关键的一步，将片段转成向量存入 Milvus
+    # 最关键的一步，将片段转成向量存入 ChromaDB
     self.add_documents_to_db(split_docs, collection_name)
     
     return True
 ```
 
 #### 3. 核心入库逻辑 (`add_documents_to_db`)
-这里展示了如何优雅地处理 Milvus 集合的创建与追加。
+这里展示了如何优雅地处理 ChromaDB 集合的创建与追加。
 ```python
 def add_documents_to_db(self, documents: List[Document], collection_name: str = None):
     # 检查集合是否已经存在
+    client = chromadb.PersistentClient(path=self.persist_directory)
+    collections = [c.name for c in client.list_collections()]
+    
     if collection_exists:
-        # 如果存在，我们创建一个 Milvus 实例并指向它
-        self.vectorstore = Milvus(
-            embedding_function=self.embeddings,
+        # 如果存在，我们创建一个 Chroma 实例并指向它
+        self.vectorstore = Chroma(
             collection_name=target_collection,
-            ...
+            embedding_function=self.embeddings,
+            persist_directory=self.persist_directory
         )
         # 【追加模式】：直接把新文档加进去
         self.vectorstore.add_documents(documents)
     else:
         # 如果不存在，这是第一次创建
-        # 【创建模式】：Milvus.from_documents 会自动分析文档结构
+        # 【创建模式】：Chroma.from_documents 会自动分析文档结构
         # 创建新的集合，定义 Schema（字段结构），并插入数据
-        self.vectorstore = Milvus.from_documents(
+        self.vectorstore = Chroma.from_documents(
             documents=documents,
             embedding=self.embeddings,
             collection_name=target_collection,
-            ...
+            persist_directory=self.persist_directory
         )
 ```
 
@@ -183,7 +197,7 @@ def add_documents_to_db(self, documents: List[Document], collection_name: str = 
 def search_similar_content(self, query: str, ...):
     # 这里的 search 方法会做两件事：
     # 1. 把你的问题 query (例如"公司的报销流程是怎样的？") 变成向量。
-    # 2. 在 Milvus 里计算这个向量和库里几亿个向量的"余弦相似度"。
+    # 2. 在 ChromaDB 里计算这个向量和库里几亿个向量的"余弦相似度"。
     # 3. 返回得分最高的前 K 个文档块。
     search_results = self.db_manager.search(query=query, k=k, ...)
     
@@ -198,7 +212,7 @@ def search_similar_content(self, query: str, ...):
 这是 RAG 的完整闭环。
 ```python
 def answer_question(self, question: str, ...):
-    # 1. 检索：先去 Milvus 找资料
+    # 1. 检索：先去 ChromaDB 找资料
     relevant_docs = self.search_similar_content(question, ...)
     
     # 2. 构建上下文 (Context Construction)
@@ -236,11 +250,11 @@ user_prompt = f"问题：{question}\n\n【参考资料】：\n{context}"
 
 **Q1: 为什么我的文档上传了，但是搜不到？**
 *   **原因 1**：文档太短或格式乱码，导致 Document Loader 没读出内容。
-*   **原因 2**：Milvus 还没把数据刷入磁盘（Flush），虽然我们的代码处理了自动刷新，但偶尔会有延迟。
+*   **原因 2**：ChromaDB 还没把数据刷入磁盘，但通常 ChomeDB 是实时持久化的。
 *   **原因 3**：切分问题。如果关键词被切分到了两个块里，可能导致语义不连贯。
 
-**Q2: Milvus 和 MySQL 能混用吗？**
-*   **最佳实践**：通常我们将**向量数据**（Feature Vectors）存 Milvus，而将**元数据**（Metadata，如文件名、上传者、时间）存 MySQL。然后通过 ID 进行关联。本项目为了简化，直接将少量元数据存在了 Milvus 的 Metadata 字段中。
+**Q2: ChromaDB 和 MySQL 能混用吗？**
+*   **最佳实践**：通常我们将**向量数据**（Feature Vectors）存 ChromaDB，而将**元数据**（Metadata，如文件名、上传者、时间）存 MySQL。然后通过 ID 进行关联。本项目为了简化，直接将少量元数据存在了 ChromaDB 的 Metadata 字段中。
 
 **Q3: `k=5` 是什么意思？**
 *   `k` 代表 **Top-K**，即每次检索返回最相似的 5 个片段。

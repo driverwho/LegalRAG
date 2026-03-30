@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-from api_integration import register_vector_routes
+from api.vector_api import register_vector_routes
 
 # 添加当前目录到 python path 以便导入模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -36,4 +36,7 @@ if __name__ == '__main__':
     
     print("启动 RAG 后端服务...")
     print(f"API 地址: http://{host if host != '0.0.0.0' else 'localhost'}:{port}/api/vector/")
-    app.run(host=host, port=port, debug=debug)
+    
+    # 如果在生产环境中运行，应禁用调试模式和热重载
+    # use_reloader=False 可以防止开发模式下的自动重载
+    app.run(host=host, port=port, debug=debug, use_reloader=False)

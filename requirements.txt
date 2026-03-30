@@ -3,8 +3,9 @@ flask-cors
 python-dotenv
 langchain-community
 langchain-core
-langchain-milvus
+langchain-chroma
 langchain-text-splitters
-pymilvus
 openai
 dashscope
+unstructured
+markdown

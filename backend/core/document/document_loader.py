@@ -35,7 +35,8 @@ class DocumentLoader:
         '.docx': 'docx',
         '.doc': 'docx',
         '.xlsx': 'excel',
-        '.xls': 'excel'
+        '.xls': 'excel',
+        '.md': 'markdown'  # 添加对Markdown文件的支持
     }
     
     def __init__(self, encoding: str = 'utf-8'):
@@ -168,6 +169,34 @@ class DocumentLoader:
             logger.error(f"加载Excel文件失败 {file_path}: {e}")
             return []
     
+    def load_markdown_file(self, file_path: str) -> List[Document]:
+        """加载Markdown文件"""
+        try:
+            # 尝试使用UnstructuredMarkdownLoader
+            try:
+                from langchain_community.document_loaders import UnstructuredMarkdownLoader
+                loader = UnstructuredMarkdownLoader(file_path)
+            except ImportError:
+                # 如果没有安装unstructured库，回退到文本加载器
+                logger.warning(f"未安装unstructured库，使用文本加载器处理Markdown文件: {file_path}")
+                from langchain_community.document_loaders import TextLoader
+                loader = TextLoader(file_path, encoding=self.encoding)
+                
+            documents = loader.load()
+            
+            # 添加文件信息到元数据
+            for doc in documents:
+                doc.metadata.update({
+                    'source': file_path,
+                    'file_type': 'markdown',
+                    'file_name': Path(file_path).name
+                })
+            
+            return documents
+        except Exception as e:
+            logger.error(f"加载Markdown文件失败 {file_path}: {e}")
+            return []
+
     def load_single_file(self, file_path: str, **kwargs) -> List[Document]:
         """
         加载单个文件
@@ -195,6 +224,8 @@ class DocumentLoader:
             return self.load_docx_file(file_path)
         elif file_type == 'excel':
             return self.load_excel_file(file_path)
+        elif file_type == 'markdown':  # 添加Markdown文件处理
+            return self.load_markdown_file(file_path)
         else:
             logger.warning(f"不支持的文件类型: {file_path}")
             # 尝试作为文本文件加载

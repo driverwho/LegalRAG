@@ -14,9 +14,9 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-from vector_db_manager import VectorDatabaseManager
-from vector_retriever import VectorRetriever
-from document_loader import DocumentLoader
+from core.vector_db.chromadb_manager import VectorDatabaseManager, get_db_manager
+from core.vector_db.vector_retriever import VectorRetriever
+from core.document.document_loader import DocumentLoader
 
 # 创建蓝图
 vector_bp = Blueprint('vector', __name__, url_prefix='/api/vector')
@@ -24,9 +24,10 @@ vector_bp = Blueprint('vector', __name__, url_prefix='/api/vector')
 # 全局变量存储向量系统实例
 vector_manager: VectorDatabaseManager = None
 vector_retriever: VectorRetriever = None
+initialized = False  # 添加初始化标志
 
 # 临时上传目录
-UPLOAD_FOLDER = '/tmp/vector_uploads'
+UPLOAD_FOLDER = './temp/vector_uploads'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
@@ -35,24 +36,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def init_vector_system(
-    milvus_host: str = None,
-    milvus_port: str = None,
-    embedding_model: str = None,
-    dashscope_api_key: str = None
-):
+def init_vector_system():
     """初始化向量系统"""
-    global vector_manager, vector_retriever
+    global vector_manager, vector_retriever, initialized
+    
+    if initialized:
+        logger.info("向量系统已初始化，跳过重复初始化")
+        return True
     
     try:
-        vector_manager = VectorDatabaseManager(
-            milvus_host=milvus_host,
-            milvus_port=milvus_port,
-            embedding_model=embedding_model,
-            dashscope_api_key=dashscope_api_key
-        )
+        # 使用全局管理器
+        vector_manager = get_db_manager()
         vector_retriever = VectorRetriever(vector_manager)
-        logger.info(f"向量系统初始化成功，连接到 Milvus at {milvus_host}:{milvus_port}")
+        initialized = True
+        logger.info("向量系统初始化成功，使用 ChromaDB")
         return True
     except Exception as e:
         logger.error(f"向量系统初始化失败: {str(e)}")
@@ -65,10 +62,7 @@ def upload_document():
     global vector_manager
     
     if not vector_manager:
-        return jsonify({
-            'success': False,
-            'message': '向量系统未初始化'
-        }), 400
+        vector_manager = get_db_manager()
     
     try:
         data = request.get_json()
@@ -120,7 +114,7 @@ def upload_file():
     global vector_manager
     
     if not vector_manager:
-        return jsonify({'success': False, 'message': '向量系统未初始化'}), 400
+        vector_manager = get_db_manager()
 
     if 'file' not in request.files:
         return jsonify({'success': False, 'message': '未找到文件部分'}), 400
@@ -162,11 +156,8 @@ def query_documents():
     """查询文档"""
     global vector_retriever
     
-    if not vector_retriever:
-        return jsonify({
-            'success': False,
-            'message': '向量系统未初始化'
-        }), 400
+    if not initialized:
+        init_vector_system()
     
     try:
         data = request.get_json()
@@ -212,11 +203,8 @@ def search_similar():
     """相似性搜索"""
     global vector_retriever
     
-    if not vector_retriever:
-        return jsonify({
-            'success': False,
-            'message': '向量系统未初始化'
-        }), 400
+    if not initialized:
+        init_vector_system()
     
     try:
         data = request.get_json()
@@ -259,11 +247,8 @@ def get_collection_info():
     """获取集合信息"""
     global vector_manager
     
-    if not vector_manager:
-        return jsonify({
-            'success': False,
-            'message': '向量系统未初始化'
-        }), 400
+    if not initialized:
+        init_vector_system()
     
     collection_name = request.args.get('collection_name')
     if not collection_name:
@@ -292,11 +277,8 @@ def clear_collection():
     """清空集合"""
     global vector_manager
     
-    if not vector_manager:
-        return jsonify({
-            'success': False,
-            'message': '向量系统未初始化'
-        }), 400
+    if not initialized:
+        init_vector_system()
     
     data = request.get_json()
     if not data or 'collection_name' not in data:
@@ -308,7 +290,7 @@ def clear_collection():
     collection_name = data['collection_name']
 
     try:
-        vector_manager.clear_database(collection_name)
+        vector_manager.clear_database()
         return jsonify({
             'success': True,
             'message': f"集合 '{collection_name}' 已清空"
@@ -328,7 +310,7 @@ def not_found(error):
     return jsonify({
         'success': False,
         'message': '接口不存在'
-    }), 404
+    }), 400
 
 
 @vector_bp.errorhandler(500)

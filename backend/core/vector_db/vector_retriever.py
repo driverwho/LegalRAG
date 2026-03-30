@@ -19,7 +19,7 @@ from langchain_core.documents import Document
 
 
 # 本地模块
-from vector_db_manager import VectorDatabaseManager
+from core.vector_db.chromadb_manager import VectorDatabaseManager
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)

@@ -3,9 +3,9 @@
 基于LangChain实现文档向量化存储和检索功能
 """
 
-from vector_db_manager import VectorDatabaseManager
-from document_loader import DocumentLoader
-from vector_retriever import VectorRetriever, RetrievalResult, QuestionClassifier
+from backend.core.vector_db.chromadb_manager import VectorDatabaseManager
+from backend.core.document.document_loader import DocumentLoader
+from backend.core.vector_db.vector_retriever import VectorRetriever, RetrievalResult, QuestionClassifier
 
 __version__ = "1.0.0"
 __author__ = "Your Name"
