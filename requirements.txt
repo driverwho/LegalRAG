@@ -1,11 +1,37 @@
-flask
-flask-cors
-python-dotenv
-langchain-community
-langchain-core
-langchain-chroma
-langchain-text-splitters
-openai
-dashscope
-unstructured
-markdown
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Configuration
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# LangChain ecosystem
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-core>=0.2.0
+langchain-chroma>=0.1.0
+langchain-text-splitters>=0.2.0
+
+# Vector store
+chromadb>=0.4.0
+
+# LLM & Embedding
+openai>=1.0.0
+dashscope>=1.14.0
+
+# Document processing
+unstructured>=0.10.0
+markdown>=3.5.0
+pypdf>=3.0.0
+docx2txt>=0.8
+openpyxl>=3.1.0
+
+# Utilities
+werkzeug>=3.0.0
+
+# Legacy (keep for backward compatibility during migration)
+flask>=3.0.0
+flask-cors>=4.0.0
