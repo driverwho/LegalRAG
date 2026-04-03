@@ -4,7 +4,8 @@ import os
 import logging
 from typing import List
 
-from langchain_community.embeddings import DashScopeEmbeddings, HuggingFaceEmbeddings
+from langchain_community.embeddings import DashScopeEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.embeddings import Embeddings
 
 logger = logging.getLogger(__name__)
@@ -31,13 +32,14 @@ class EmbeddingManager:
     def _init_embeddings(self) -> Embeddings:
         """Initialize embedding model with automatic fallback."""
         try:
-            if not self.dashscope_api_key:
-                logger.warning("No DashScope API key provided — attempting env lookup")
-                self.dashscope_api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+            # Ensure we have an API key
+            if not self.dashscope_api_key or self.dashscope_api_key.strip() == "":
+                logger.warning("No DashScope API key found in environment")
+                raise ValueError("DashScope API key is required")
 
             embeddings = DashScopeEmbeddings(
                 model=self.embedding_model,
-                dashscope_api_key=self.dashscope_api_key,
+                dashscope_api_key=self.dashscope_api_key.strip(),
             )
             # Smoke test
             embeddings.embed_query("test")

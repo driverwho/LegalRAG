@@ -2,7 +2,7 @@
 
 import os
 from functools import lru_cache
-from typing import List
+from typing import List, Tuple
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = Field(default=500, description="Document chunk size")
     CHUNK_OVERLAP: int = Field(default=50, description="Document chunk overlap")
 
+    # PDF OCR Settings - images smaller than these ratios will be skipped
+    PDF_OCR_THRESHOLD: Tuple[float, float] = Field(
+        default=(0.01, 0.01),
+        description="Minimum image size ratio (width_ratio, height_ratio) to trigger OCR",
+    )
+
     # Retrieval
     SIMILARITY_THRESHOLD: float = Field(
         default=0.5, description="Minimum similarity score"
@@ -60,6 +66,19 @@ class Settings(BaseSettings):
         "case_sensitive": True,
         "extra": "ignore",
     }
+
+    def __init__(self, **kwargs):
+        # Try multiple locations for .env file
+        env_paths = [
+            ".env",  # Current directory
+            "../../.env",  # From backend/app/config/ to backend/
+            "backend/.env",  # Project root
+        ]
+        for path in env_paths:
+            if os.path.exists(path):
+                self.model_config["env_file"] = path
+                break
+        super().__init__(**kwargs)
 
 
 @lru_cache()

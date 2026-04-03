@@ -12,8 +12,9 @@ from langchain_community.document_loaders import (
     PyPDFLoader,
     Docx2txtLoader,
     UnstructuredExcelLoader,
-    DirectoryLoader,
 )
+
+from backend.app.core.document.ocr import get_ocr
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class DocumentLoader:
 
     Consolidates the previously duplicated document_loader.py and
     document_processor.py into a single implementation.
+    Supports OCR for PDF and DOCX files with embedded images.
     """
 
     SUPPORTED_EXTENSIONS: Dict[str, str] = {
@@ -36,14 +38,15 @@ class DocumentLoader:
         ".md": "markdown",
     }
 
-    def __init__(self, encoding: str = "utf-8"):
+    def __init__(self, encoding: str = "utf-8", use_ocr: bool = False):
         self.encoding = encoding
+        self.use_ocr = use_ocr
         # Strategy dispatch table — avoids long if/elif chains
         self._loaders = {
             "text": self._load_text,
             "csv": self._load_csv,
-            "pdf": self._load_pdf,
-            "docx": self._load_docx,
+            "pdf": self._load_pdf_ocr if use_ocr else self._load_pdf,
+            "docx": self._load_docx_ocr if use_ocr else self._load_docx,
             "excel": self._load_excel,
             "markdown": self._load_markdown,
         }
@@ -54,7 +57,13 @@ class DocumentLoader:
 
     def get_file_type(self, file_path: str) -> str:
         ext = Path(file_path).suffix.lower()
-        return self.SUPPORTED_EXTENSIONS.get(ext, "unknown")
+        file_type = self.SUPPORTED_EXTENSIONS.get(ext, "unknown")
+        if file_type == "unknown":
+            logger.warning(
+                f"Unknown file type for '{file_path}' (extension: '{ext}'). "
+                f"Supported: {list(self.SUPPORTED_EXTENSIONS.keys())}"
+            )
+        return file_type
 
     def is_supported(self, file_path: str) -> bool:
         return self.get_file_type(file_path) != "unknown"
@@ -82,7 +91,24 @@ class DocumentLoader:
             )
             loader_fn = self._load_text
 
-        return loader_fn(file_path, **kwargs)
+        try:
+            logger.info(f"Loading file with '{loader_fn.__name__}': {file_path}")
+            return loader_fn(file_path, **kwargs)
+        except Exception as e:
+            logger.error(
+                f"Failed to load file '{file_path}' with {loader_fn.__name__}: {e}"
+            )
+            # Try fallback loaders
+            if file_type in ["pdf", "docx"]:
+                logger.info(f"Attempting fallback to standard loader for: {file_path}")
+                fallback_fn = self._load_pdf if file_type == "pdf" else self._load_docx
+                try:
+                    return fallback_fn(file_path, **kwargs)
+                except Exception as fallback_e:
+                    logger.error(
+                        f"Fallback loader also failed for '{file_path}': {fallback_e}"
+                    )
+            raise
 
     def load_directory(
         self,
@@ -175,6 +201,7 @@ class DocumentLoader:
         try:
             loader = PyPDFLoader(file_path)
             docs = loader.load()
+            print("original pdf loader.")
             for i, doc in enumerate(docs):
                 doc.metadata["page_number"] = i + 1
             return self._enrich_metadata(docs, file_path, "pdf")
@@ -220,3 +247,51 @@ class DocumentLoader:
         except Exception as exc:
             logger.error("Failed to load Markdown file %s: %s", file_path, exc)
             return []
+
+    def _load_pdf_ocr(self, file_path: str, **kwargs) -> List[Document]:
+        """Load PDF with OCR for image text extraction.
+
+        Uses RapidOCRPDFLoader to extract text from both text content
+        and embedded images.
+        """
+        try:
+            from backend.app.core.document.pdf_loader import RapidOCRPDFLoader
+
+            loader = RapidOCRPDFLoader(file_path)
+            docs = loader.load()
+            print("ocr_pdf loading\n")
+            for i, doc in enumerate(docs):
+                doc.metadata["page_number"] = i + 1
+            return self._enrich_metadata(docs, file_path, "pdf")
+        except ImportError as exc:
+            logger.warning(
+                "OCR dependencies not installed — falling back to standard PDF loader: %s",
+                exc,
+            )
+            return self._load_pdf(file_path, **kwargs)
+        except Exception as exc:
+            logger.error("Failed to load PDF with OCR %s: %s", file_path, exc)
+            return self._load_pdf(file_path, **kwargs)
+
+    def _load_docx_ocr(self, file_path: str, **kwargs) -> List[Document]:
+        """Load DOCX with OCR for image text extraction.
+
+        Uses RapidOCRDocLoader to extract text from both text content
+        and embedded images.
+        """
+        try:
+            from backend.app.core.document.docx_loader import RapidOCRDocLoader
+
+            loader = RapidOCRDocLoader(file_path)
+            print("OCR_DOCX loadding.")
+            docs = loader.load()
+            return self._enrich_metadata(docs, file_path, "docx")
+        except ImportError as exc:
+            logger.warning(
+                "OCR dependencies not installed — falling back to standard DOCX loader: %s",
+                exc,
+            )
+            return self._load_docx(file_path, **kwargs)
+        except Exception as exc:
+            logger.error("Failed to load DOCX with OCR %s: %s", file_path, exc)
+            return self._load_docx(file_path, **kwargs)

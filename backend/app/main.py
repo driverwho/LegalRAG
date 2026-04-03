@@ -1,7 +1,14 @@
 """FastAPI application factory for the RAG Backend Service."""
 
 import os
+import sys
 import logging
+
+# Add the project root directory to sys.path to enable absolute imports
+# This ensures that 'backend' module can be found when running from any directory
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,3 +83,4 @@ if __name__ == "__main__":
         port=settings.APP_PORT,
         reload=settings.DEBUG,
     )
+
