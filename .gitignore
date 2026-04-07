@@ -2,7 +2,46 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.egg-info/
+dist/
+build/
 
-# Environment
+# Virtual environment
+venv/
+.venv/
+
+# Environment variables
 .env
 *.env.local
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing / Linting cache
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Database / Vector store
+chroma_db/
+
+# Temp / Upload files
+temp/
+
+# Node.js (frontend)
+node_modules/
+
+# Misc
+*.log
