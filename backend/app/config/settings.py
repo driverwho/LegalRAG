@@ -54,6 +54,30 @@ class Settings(BaseSettings):
         description="Minimum image size ratio (width_ratio, height_ratio) to trigger OCR",
     )
 
+    # Document Preprocessing
+    ENABLE_PREPROCESSING: bool = Field(
+        default=True, description="Enable document preprocessing pipeline"
+    )
+    ENABLE_LLM_PREPROCESSING: bool = Field(
+        default=True, description="Enable Qwen LLM processing stage in preprocessing"
+    )
+    PREPROCESSING_LLM_CHUNK_SIZE: int = Field(
+        default=6000,
+        description="Max characters per chunk for LLM preprocessing",
+    )
+
+    # Document Quality Check
+    ENABLE_QUALITY_CHECK: bool = Field(
+        default=True, description="Enable document quality checking"
+    )
+    ENABLE_LLM_QUALITY_CHECK: bool = Field(
+        default=True, description="Enable Qwen LLM analysis in quality checker"
+    )
+    QUALITY_CHECK_LLM_CHUNK_SIZE: int = Field(
+        default=4000,
+        description="Max characters to send to LLM for quality check",
+    )
+
     # Retrieval
     SIMILARITY_THRESHOLD: float = Field(
         default=0.5, description="Minimum similarity score"

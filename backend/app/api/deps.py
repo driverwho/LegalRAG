@@ -9,6 +9,8 @@ from backend.app.core.llm.chat import ChatManager
 from backend.app.core.retriever.rag import RAGPipeline
 from backend.app.core.document.loader import DocumentLoader
 from backend.app.core.document.splitter import DocumentSplitter
+from backend.app.core.document.preprocessor import DocumentPreprocessor
+from backend.app.core.quality.checker import DocumentChecker
 
 
 @lru_cache()
@@ -61,4 +63,26 @@ def get_document_splitter() -> DocumentSplitter:
     return DocumentSplitter(
         chunk_size=settings.CHUNK_SIZE,
         chunk_overlap=settings.CHUNK_OVERLAP,
+    )
+
+
+def get_document_preprocessor() -> DocumentPreprocessor:
+    """Create a DocumentPreprocessor wired from Settings."""
+    settings = get_settings()
+    return DocumentPreprocessor(
+        api_key=settings.DASHSCOPE_API_KEY,
+        base_url=settings.LLM_BASE_URL,
+        model=settings.LLM_MODEL,
+        enable_llm_preprocessing=settings.ENABLE_LLM_PREPROCESSING,
+    )
+
+
+def get_document_checker() -> DocumentChecker:
+    """Create a DocumentChecker wired from Settings."""
+    settings = get_settings()
+    return DocumentChecker(
+        api_key=settings.DASHSCOPE_API_KEY,
+        base_url=settings.LLM_BASE_URL,
+        model=settings.LLM_MODEL,
+        enable_llm_check=settings.ENABLE_LLM_QUALITY_CHECK,
     )

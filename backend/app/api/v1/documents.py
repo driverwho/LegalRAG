@@ -13,10 +13,14 @@ from backend.app.models.responses import UploadResponse
 from backend.app.core.vector_store.chroma import ChromaVectorStore
 from backend.app.core.document.loader import DocumentLoader
 from backend.app.core.document.splitter import DocumentSplitter
+from backend.app.core.document.preprocessor import DocumentPreprocessor
+from backend.app.core.quality.checker import DocumentChecker
 from backend.app.api.deps import (
     get_vector_store,
     get_document_loader,
     get_document_splitter,
+    get_document_preprocessor,
+    get_document_checker,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,12 +34,14 @@ def _process_and_store(
     vector_store: ChromaVectorStore,
     loader: DocumentLoader,
     splitter: DocumentSplitter,
+    preprocessor: DocumentPreprocessor,
+    checker: DocumentChecker,
 ) -> dict:
-    """Load → split → store a document. Returns collection info on success."""
-    logger.info(f"Processing document: {file_path}")
+    """Load → preprocess (with quality check) → split → store a document.
 
-    # Log file info
-    import os
+    Returns collection info and quality report on success.
+    """
+    logger.info(f"Processing document: {file_path}")
 
     file_size = os.path.getsize(file_path)
     file_ext = os.path.splitext(file_path)[1]
@@ -43,8 +49,18 @@ def _process_and_store(
 
     documents = loader.load_single_file(file_path)
 
-    # 后续加入消息队列
-    # 后续这里还要加入原始文档优化
+    # DEBUG: 将加载后的文档内容保存到txt文件
+    debug_dir = os.path.join(os.path.dirname(file_path), "debug_output")
+    os.makedirs(debug_dir, exist_ok=True)
+    debug_path = os.path.join(
+        debug_dir, Path(file_path).stem + "_loaded.txt"
+    )
+    with open(debug_path, "w", encoding="utf-8") as f:
+        for i, doc in enumerate(documents):
+            f.write(f"=== 第 {i+1} 段 ===\n")
+            f.write(doc.page_content)
+            f.write("\n\n")
+    logger.info(f"[DEBUG] 文档加载内容已保存至: {debug_path}")
 
     if not documents:
         raise HTTPException(
@@ -53,11 +69,32 @@ def _process_and_store(
         )
 
     logger.info(f"Document loaded successfully: {len(documents)} pages/sections")
-    chunks = splitter.split(documents)
+
+    # Preprocess documents (NLTK + Qwen)
+    logger.info("Running document preprocessing pipeline...")
+    processed_documents = preprocessor.preprocess(documents)
+    logger.info(f"Preprocessing complete: {len(processed_documents)} documents")
+
+    # Quality check: compare before vs after preprocessing
+    logger.info("Running quality comparison (before vs after preprocessing)...")
+    quality_report = checker.compare_before_after(documents, processed_documents)
+    before_errors = quality_report["before"]["total_errors"]
+    after_errors = quality_report["after"]["total_errors"]
+    errors_reduced = quality_report["improvement"]["errors_reduced"]
+    reduction_rate = quality_report["improvement"]["reduction_rate"]
+    logger.info(
+        f"Quality comparison: {before_errors} errors (before) → {after_errors} errors (after), "
+        f"reduced {errors_reduced} errors ({reduction_rate}% improvement)"
+    )
+
+    chunks = splitter.split(processed_documents)
     logger.info(f"Document split into {len(chunks)} chunks")
     vector_store.add_documents(chunks, collection_name=collection_name)
 
-    return vector_store.get_collection_info(collection_name=collection_name)
+    db_info = vector_store.get_collection_info(collection_name=collection_name)
+    db_info["quality_report"] = quality_report
+
+    return db_info
 
 
 @router.post("/upload_document", response_model=UploadResponse)
@@ -66,6 +103,8 @@ async def upload_document(
     vector_store: ChromaVectorStore = Depends(get_vector_store),
     loader: DocumentLoader = Depends(get_document_loader),
     splitter: DocumentSplitter = Depends(get_document_splitter),
+    preprocessor: DocumentPreprocessor = Depends(get_document_preprocessor),
+    checker: DocumentChecker = Depends(get_document_checker),
 ):
     """Upload a document by server-side file path."""
     if not os.path.exists(body.file_path):
@@ -75,7 +114,13 @@ async def upload_document(
 
     try:
         db_info = _process_and_store(
-            body.file_path, body.collection_name, vector_store, loader, splitter
+            body.file_path,
+            body.collection_name,
+            vector_store,
+            loader,
+            splitter,
+            preprocessor,
+            checker,
         )
         return UploadResponse(
             success=True,
@@ -100,6 +145,8 @@ async def upload_file(
     vector_store: ChromaVectorStore = Depends(get_vector_store),
     loader: DocumentLoader = Depends(get_document_loader),
     splitter: DocumentSplitter = Depends(get_document_splitter),
+    preprocessor: DocumentPreprocessor = Depends(get_document_preprocessor),
+    checker: DocumentChecker = Depends(get_document_checker),
 ):
     """Upload a file via multipart form data."""
     if not file.filename:
@@ -144,7 +191,13 @@ async def upload_file(
             logger.info(f"Using OCR-enabled loader for file: {safe_name}")
 
         db_info = _process_and_store(
-            file_path, collection_name, vector_store, loader, splitter
+            file_path,
+            collection_name,
+            vector_store,
+            loader,
+            splitter,
+            preprocessor,
+            checker,
         )
         return UploadResponse(
             success=True,
