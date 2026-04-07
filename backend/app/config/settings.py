@@ -24,6 +24,15 @@ class Settings(BaseSettings):
         description="LLM API base URL (OpenAI compatible)",
     )
     LLM_MODEL: str = Field(default="qwen-plus", description="LLM model name")
+    LLM_MODEL_MAX: str = Field(default="qwen3-max", description="LLM model name (max tier)")
+
+    # Moonshot / Kimi
+    MOONSHOT_API_KEY: str = Field(default="", description="Moonshot API key")
+    MOONSHOT_BASE_URL: str = Field(
+        default="https://api.moonshot.cn/v1",
+        description="Moonshot API base URL (OpenAI compatible)",
+    )
+    MOONSHOT_MODEL: str = Field(default="kimi-k2.5", description="Moonshot model name")
 
     # Vector Store
     COLLECTION_NAME: str = Field(

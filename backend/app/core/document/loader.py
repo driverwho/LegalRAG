@@ -210,13 +210,6 @@ class DocumentLoader:
             for i, doc in enumerate(loader.lazy_load()):
                 doc.metadata["page_number"] = i + 1
                 docs.append(doc)
-                if (i + 1) % 20 == 0:
-                    elapsed = time.time() - start
-                    speed = (i + 1) / elapsed if elapsed > 0 else 0
-                    logger.info(
-                        "[PDF] 进度: 已加载 %d 页 | 耗时 %.1f秒 | %.1f 页/秒",
-                        i + 1, elapsed, speed,
-                    )
 
             elapsed = time.time() - start
             logger.info(

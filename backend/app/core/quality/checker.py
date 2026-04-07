@@ -439,32 +439,58 @@ class DocumentChecker:
             error_type_distribution=distribution,
         )
 
-        logger.info(
-            "Document check complete: %d errors found (%d rule-based, %d LLM-detected)",
-            result.total_errors,
-            result.rule_based_errors,
-            result.llm_detected_errors,
-        )
-
         return result
 
-    def check_documents(self, documents: List[Document]) -> List[CheckResult]:
-        """Check multiple documents for quality issues.
+    def check_documents(self, documents: List[Document]) -> CheckResult:
+        """Check multiple documents and return one aggregated result.
+
+        Each segment is checked individually, but results are merged
+        into a single CheckResult. Logs are emitted only once at the end.
 
         Args:
             documents: List of Document objects to check.
 
         Returns:
-            List of CheckResult objects (one per document).
+            A single aggregated CheckResult for the entire document.
         """
-        results: List[CheckResult] = []
+        all_errors: List[ErrorDetail] = []
+        total_rule = 0
+        total_llm = 0
 
         for idx, doc in enumerate(documents):
-            logger.debug("Checking document %d/%d", idx + 1, len(documents))
             result = self.check(doc.page_content)
-            results.append(result)
+            all_errors.extend(result.error_details)
+            total_rule += result.rule_based_errors
+            total_llm += result.llm_detected_errors
 
-        return results
+        # Deduplicate across segments
+        deduped = self._deduplicate_errors(all_errors)
+
+        distribution: Dict[str, int] = {}
+        for error in deduped:
+            distribution[error.error_type] = distribution.get(error.error_type, 0) + 1
+
+        llm_count = sum(1 for e in deduped if e.position is None)
+        rule_count = len(deduped) - llm_count
+
+        aggregated = CheckResult(
+            total_errors=len(deduped),
+            rule_based_errors=rule_count,
+            llm_detected_errors=llm_count,
+            error_details=deduped,
+            error_type_distribution=distribution,
+        )
+
+        logger.info(
+            "文档质量检查完成 (%d 段): 共 %d 个错误 (规则检测 %d, LLM检测 %d), 分布: %s",
+            len(documents),
+            aggregated.total_errors,
+            aggregated.rule_based_errors,
+            aggregated.llm_detected_errors,
+            dict(aggregated.error_type_distribution),
+        )
+
+        return aggregated
 
     def compare_before_after(
         self,
@@ -480,24 +506,11 @@ class DocumentChecker:
         Returns:
             Comparison report dictionary.
         """
-        before_results = self.check_documents(before_docs)
-        after_results = self.check_documents(after_docs)
+        before_result = self.check_documents(before_docs)
+        after_result = self.check_documents(after_docs)
 
-        # Aggregate metrics
-        before_total = sum(r.total_errors for r in before_results)
-        after_total = sum(r.total_errors for r in after_results)
-
-        # Aggregate distributions
-        before_dist: Dict[str, int] = {}
-        after_dist: Dict[str, int] = {}
-
-        for result in before_results:
-            for error_type, count in result.error_type_distribution.items():
-                before_dist[error_type] = before_dist.get(error_type, 0) + count
-
-        for result in after_results:
-            for error_type, count in result.error_type_distribution.items():
-                after_dist[error_type] = after_dist.get(error_type, 0) + count
+        before_total = before_result.total_errors
+        after_total = after_result.total_errors
 
         errors_reduced = before_total - after_total
         reduction_rate = (
@@ -505,8 +518,14 @@ class DocumentChecker:
         )
 
         report = {
-            "before": {"total_errors": before_total, "distribution": before_dist},
-            "after": {"total_errors": after_total, "distribution": after_dist},
+            "before": {
+                "total_errors": before_total,
+                "distribution": before_result.error_type_distribution,
+            },
+            "after": {
+                "total_errors": after_total,
+                "distribution": after_result.error_type_distribution,
+            },
             "improvement": {
                 "errors_reduced": errors_reduced,
                 "reduction_rate": round(reduction_rate, 2),
@@ -514,7 +533,9 @@ class DocumentChecker:
         }
 
         logger.info(
-            "Comparison complete: %d errors reduced (%.1f%% improvement)",
+            "质量对比完成: 处理前 %d 个错误 → 处理后 %d 个错误, 减少 %d 个 (改善 %.1f%%)",
+            before_total,
+            after_total,
             errors_reduced,
             reduction_rate,
         )
