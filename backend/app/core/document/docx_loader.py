@@ -7,7 +7,8 @@ import numpy as np
 import tqdm
 from langchain_community.document_loaders.unstructured import UnstructuredFileLoader
 from PIL import Image
-from rapidocr_onnxruntime import RapidOCR
+
+from backend.app.core.document.ocr import get_ocr
 
 logger = logging.getLogger(__name__)
 

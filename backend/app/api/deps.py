@@ -53,7 +53,7 @@ def get_rag_pipeline() -> RAGPipeline:
 
 
 def get_document_loader() -> DocumentLoader:
-    return DocumentLoader(use_ocr=True)
+    return DocumentLoader(use_ocr=False)
 
 
 def get_document_splitter() -> DocumentSplitter:

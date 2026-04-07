@@ -199,11 +199,30 @@ class DocumentLoader:
 
     def _load_pdf(self, file_path: str, **kwargs) -> List[Document]:
         try:
+            import time
+
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            logger.info("[PDF] 开始加载: %s (%.1f MB)", Path(file_path).name, file_size_mb)
+
+            start = time.time()
             loader = PyPDFLoader(file_path)
-            docs = loader.load()
-            print("original pdf loader.")
-            for i, doc in enumerate(docs):
+            docs = []
+            for i, doc in enumerate(loader.lazy_load()):
                 doc.metadata["page_number"] = i + 1
+                docs.append(doc)
+                if (i + 1) % 20 == 0:
+                    elapsed = time.time() - start
+                    speed = (i + 1) / elapsed if elapsed > 0 else 0
+                    logger.info(
+                        "[PDF] 进度: 已加载 %d 页 | 耗时 %.1f秒 | %.1f 页/秒",
+                        i + 1, elapsed, speed,
+                    )
+
+            elapsed = time.time() - start
+            logger.info(
+                "[PDF] 加载完成: 共 %d 页, 耗时 %.1f 秒",
+                len(docs), elapsed,
+            )
             return self._enrich_metadata(docs, file_path, "pdf")
         except Exception as exc:
             logger.error("Failed to load PDF file %s: %s", file_path, exc)
