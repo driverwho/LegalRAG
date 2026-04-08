@@ -18,7 +18,8 @@
             :auto-upload="false"
             :on-change="handleFileChange"
             :show-file-list="true"
-            :limit="1"
+            :multiple="true"
+            :limit="10"
             :on-exceed="handleExceed"
             ref="uploadRef"
           >
@@ -49,12 +50,26 @@
           :loading="uploading" 
           @click="submitUpload"
         >
-          {{ uploading ? '正在解析入库...' : '立即解析入库' }}
+          {{ uploading ? '正在提交...' : '上传并处理' }}
         </el-button>
 
-        <div v-if="uploadSuccess" class="success-tip">
-          <el-icon><CircleCheckFilled /></el-icon>
-          <span>入库成功，快去提问吧！</span>
+        <!-- 任务进度列表 -->
+        <div v-if="taskList.length > 0" class="task-list">
+          <div class="section-title">处理进度</div>
+          <div v-for="task in taskList" :key="task.taskId" class="task-item">
+            <div class="task-header">
+              <span class="task-filename">{{ task.fileName }}</span>
+              <span :class="['task-status', task.status.toLowerCase()]">{{ taskStatusLabel(task.status) }}</span>
+            </div>
+            <el-progress 
+              :percentage="task.progress || 0" 
+              :status="task.status === 'SUCCESS' ? 'success' : task.status === 'FAILED' ? 'exception' : ''"
+              :stroke-width="6"
+              class="task-progress"
+            />
+            <div v-if="task.stage" class="task-stage">{{ task.stage }}</div>
+            <div v-if="task.message && task.status === 'FAILED'" class="task-error">{{ task.message }}</div>
+          </div>
         </div>
       </div>
 
@@ -177,7 +192,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onUnmounted } from 'vue'
 import { 
   UploadFilled, User, Service, Position, Collection, 
   CircleCheckFilled, Delete, Document, Search, ChatLineRound,
@@ -193,9 +208,12 @@ const API_BASE = 'http://localhost:5000/api/vector'
 // State
 const collectionName = ref('agent_rag')
 const uploadRef = ref(null)
-const fileToUpload = ref(null)
+const filesToUpload = ref([])
 const uploading = ref(false)
-const uploadSuccess = ref(false)
+
+// Task tracking
+const taskList = ref([])
+let pollingTimers = {}
 
 const inputQuery = ref('')
 const messages = ref([])
@@ -219,44 +237,63 @@ const clearHistory = () => {
 }
 
 // File Upload Logic
-const handleFileChange = (file) => {
-  fileToUpload.value = file.raw
-  uploadSuccess.value = false
+const handleFileChange = (file, fileList) => {
+  filesToUpload.value = fileList.map(f => f.raw)
 }
 
 const handleExceed = () => {
-  ElMessage.warning('每次仅支持上传一个文件，请移除旧文件后再试')
+  ElMessage.warning('最多同时上传 10 个文件')
 }
 
 const submitUpload = async () => {
-  if (!fileToUpload.value) {
+  if (filesToUpload.value.length === 0) {
     ElMessage.warning('请先选择文件')
     return
   }
 
   uploading.value = true
-  uploadSuccess.value = false
 
-  try {
-    const formData = new FormData()
-    formData.append('file', fileToUpload.value)
-    formData.append('collection_name', collectionName.value)
-    
-    const response = await axios.post(`${API_BASE}/upload_file`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    })
+  for (const file of filesToUpload.value) {
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('collection_name', collectionName.value)
 
-    if (response.data.success) {
-      ElMessage.success('上传并入库成功！')
-      uploadSuccess.value = true
-      uploadRef.value.clearFiles()
-      fileToUpload.value = null
+      const response = await axios.post(`${API_BASE}/upload_file`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+
+      if (response.data.success) {
+        const task = {
+          taskId: response.data.task_id,
+          fileName: file.name,
+          status: 'PENDING',
+          progress: 0,
+          stage: null,
+          message: response.data.message,
+        }
+        taskList.value.push(task)
+        startPolling(task.taskId)
+      }
+    } catch (error) {
+      console.error(`Upload failed for ${file.name}:`, error)
+      taskList.value.push({
+        taskId: null,
+        fileName: file.name,
+        status: 'FAILED',
+        progress: 0,
+        stage: null,
+        message: error.response?.data?.detail || '上传失败',
+      })
     }
-  } catch (error) {
-    console.error(error)
-    ElMessage.error(error.response?.data?.message || '上传失败')
-  } finally {
-    uploading.value = false
+  }
+
+  uploading.value = false
+  uploadRef.value?.clearFiles()
+  filesToUpload.value = []
+  
+  if (taskList.value.some(t => t.status !== 'FAILED')) {
+    ElMessage.success(`已提交 ${taskList.value.filter(t => t.status !== 'FAILED').length} 个文件处理任务`)
   }
 }
 
@@ -311,6 +348,61 @@ const scrollToBottom = () => {
     }
   })
 }
+
+// Task polling logic
+const startPolling = (taskId) => {
+  pollingTimers[taskId] = setInterval(async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/tasks/${taskId}`)
+      const data = response.data
+      
+      const task = taskList.value.find(t => t.taskId === taskId)
+      if (!task) {
+        stopPolling(taskId)
+        return
+      }
+
+      task.status = data.status
+      task.progress = data.progress || task.progress
+      task.stage = data.stage || task.stage
+      task.message = data.message || task.message
+
+      if (data.status === 'SUCCESS' || data.status === 'FAILED') {
+        stopPolling(taskId)
+        if (data.status === 'SUCCESS') {
+          ElMessage.success(`${task.fileName} 处理完成！`)
+        } else {
+          ElMessage.error(`${task.fileName} 处理失败`)
+        }
+      }
+    } catch (error) {
+      console.error(`Polling failed for ${taskId}:`, error)
+    }
+  }, 2000)
+}
+
+const stopPolling = (taskId) => {
+  if (pollingTimers[taskId]) {
+    clearInterval(pollingTimers[taskId])
+    delete pollingTimers[taskId]
+  }
+}
+
+const taskStatusLabel = (status) => {
+  const labels = {
+    'PENDING': '排队中',
+    'STARTED': '处理中',
+    'PROGRESS': '处理中',
+    'SUCCESS': '已完成',
+    'FAILED': '失败',
+  }
+  return labels[status] || status
+}
+
+// Cleanup on unmount
+onUnmounted(() => {
+  Object.keys(pollingTimers).forEach(stopPolling)
+})
 </script>
 
 <style scoped>
@@ -789,5 +881,68 @@ const scrollToBottom = () => {
 
 .user :deep(.bubble code) {
   background: rgba(255, 255, 255, 0.2);
+}
+
+/* Task list styles */
+.task-list {
+  margin-top: 20px;
+}
+
+.task-item {
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.task-filename {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.task-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.task-status.pending { background: rgba(144, 147, 153, 0.2); color: #909399; }
+.task-status.started,
+.task-status.progress { background: rgba(64, 158, 255, 0.2); color: #409eff; }
+.task-status.success { background: rgba(103, 194, 58, 0.2); color: #67c23a; }
+.task-status.failed { background: rgba(245, 108, 108, 0.2); color: #f56c6c; }
+
+.task-stage {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 4px;
+}
+
+.task-error {
+  font-size: 11px;
+  color: #f56c6c;
+  margin-top: 4px;
+}
+
+:deep(.task-progress .el-progress-bar__outer) {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+:deep(.task-progress .el-progress__text) {
+  color: rgba(255, 255, 255, 0.6) !important;
+  font-size: 11px !important;
 }
 </style>

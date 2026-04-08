@@ -24,7 +24,9 @@ class Settings(BaseSettings):
         description="LLM API base URL (OpenAI compatible)",
     )
     LLM_MODEL: str = Field(default="qwen-plus", description="LLM model name")
-    LLM_MODEL_MAX: str = Field(default="qwen3-max", description="LLM model name (max tier)")
+    LLM_MODEL_MAX: str = Field(
+        default="qwen3-max", description="LLM model name (max tier)"
+    )
 
     # Moonshot / Kimi
     MOONSHOT_API_KEY: str = Field(default="", description="Moonshot API key")
@@ -85,6 +87,16 @@ class Settings(BaseSettings):
     QUALITY_CHECK_LLM_CHUNK_SIZE: int = Field(
         default=4000,
         description="Max characters to send to LLM for quality check",
+    )
+
+    # Celery / Redis
+    CELERY_BROKER_URL: str = Field(
+        default="redis://localhost:6379/0",
+        description="Celery broker URL (Redis)",
+    )
+    CELERY_RESULT_BACKEND: str = Field(
+        default="redis://localhost:6379/1",
+        description="Celery result backend URL (Redis)",
     )
 
     # Retrieval

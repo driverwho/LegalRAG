@@ -51,3 +51,23 @@ class ErrorResponse(BaseModel):
 
     success: bool = False
     message: str
+
+
+class TaskSubmitResponse(BaseModel):
+    """Response when a document processing task is submitted."""
+
+    success: bool
+    message: str
+    task_id: str
+
+
+class TaskStatusResponse(BaseModel):
+    """Response for task status query."""
+
+    task_id: str
+    status: str
+    stage: Optional[str] = None
+    progress: Optional[int] = None
+    message: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+    result: Optional[Dict[str, Any]] = None
