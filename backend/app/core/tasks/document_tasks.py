@@ -35,30 +35,47 @@ def _compute_file_hash(file_path: str) -> str:
     return sha256_hash.hexdigest()
 
 
-def _get_services():
-    """Get all document processing services.
+def _get_preprocess_services():
+    """Get preprocessing-related services (loader, preprocessor, checker).
 
-    Instantiates services directly from settings (Celery workers don't have FastAPI DI context).
+    Does NOT include embedding/vector store - those are loaded separately
+    in chunk_and_store to avoid loading embeddings during preprocessing.
 
     Returns:
-        Tuple of (loader, preprocessor, checker, splitter, vector_store).
+        Tuple of (loader, preprocessor, checker).
     """
     from backend.app.core.document.loader import DocumentLoader
-    from backend.app.core.document.preprocessor import DocumentPreprocessor
+    from backend.app.core.document.preprocessor import DocumentPreprocessor, LLMProvider
     from backend.app.core.quality.checker import DocumentChecker
-    from backend.app.core.document.splitter import DocumentSplitter
-    from backend.app.core.vector_store.chroma import ChromaVectorStore
-    from backend.app.core.llm.embedding import EmbeddingManager
+    from openai import OpenAI as OpenAIClient
 
     settings = get_settings()
 
     loader = DocumentLoader(use_ocr=False)
+
+    # Build LLM fallback chain from configuration
+    fallback_providers = []
+    for provider_cfg in settings.get_fallback_chain():
+        if provider_cfg.get("api_key"):
+            fallback_providers.append(
+                LLMProvider(
+                    name=provider_cfg["name"],
+                    client=OpenAIClient(
+                        api_key=provider_cfg["api_key"],
+                        base_url=provider_cfg["base_url"],
+                    ),
+                    model=provider_cfg["model"],
+                )
+            )
 
     preprocessor = DocumentPreprocessor(
         api_key=settings.DASHSCOPE_API_KEY,
         base_url=settings.LLM_BASE_URL,
         model=settings.LLM_MODEL,
         enable_llm_preprocessing=settings.ENABLE_LLM_PREPROCESSING,
+        fallback_providers=fallback_providers,
+        max_retries=settings.LLM_FALLBACK_MAX_RETRIES,
+        retry_delay=settings.LLM_FALLBACK_RETRY_DELAY,
     )
 
     checker = DocumentChecker(
@@ -68,11 +85,29 @@ def _get_services():
         enable_llm_check=settings.ENABLE_LLM_QUALITY_CHECK,
     )
 
+    return loader, preprocessor, checker
+
+
+def _get_vector_services():
+    """Get vector storage services (splitter, vector_store).
+
+    Loads embedding model - call this ONLY when ready to store documents.
+
+    Returns:
+        Tuple of (splitter, vector_store).
+    """
+    from backend.app.core.document.splitter import DocumentSplitter
+    from backend.app.core.vector_store.chroma import ChromaVectorStore
+    from backend.app.core.llm.embedding import EmbeddingManager
+
+    settings = get_settings()
+
     splitter = DocumentSplitter(
         chunk_size=settings.CHUNK_SIZE,
         chunk_overlap=settings.CHUNK_OVERLAP,
     )
 
+    # Load embedding model ONLY when needed (after preprocessing)
     embedding_manager = EmbeddingManager(
         embedding_model=settings.EMBEDDING_MODEL,
         dashscope_api_key=settings.DASHSCOPE_API_KEY,
@@ -84,7 +119,7 @@ def _get_services():
         persist_directory=settings.CHROMADB_PERSIST_DIR,
     )
 
-    return loader, preprocessor, checker, splitter, vector_store
+    return splitter, vector_store
 
 
 @celery_app.task(
@@ -178,7 +213,8 @@ def preprocess_and_check(self, extract_result: Dict[str, Any]) -> Dict[str, Any]
         Dict containing all extract_result fields plus quality_report, with processed documents.
     """
     try:
-        loader, preprocessor, checker, splitter, vector_store = _get_services()
+        # Only load preprocessing services (no embedding to save time/memory)
+        loader, preprocessor, checker = _get_preprocess_services()
 
         # Deserialize documents
         documents = [
@@ -192,6 +228,18 @@ def preprocess_and_check(self, extract_result: Dict[str, Any]) -> Dict[str, Any]
 
         # Run preprocessing
         processed_documents = preprocessor.preprocess(documents)
+
+        # Check for documents that fell through to "pending" state
+        pending_count = sum(
+            1 for d in processed_documents if d.metadata.get("pending_preprocessing")
+        )
+        if pending_count:
+            update_task_progress(
+                self,
+                TaskStage.PREPROCESSING_DEGRADED,
+                60,
+                f"LLM fallback chain exhausted for {pending_count} document(s) — marked pending",
+            )
 
         update_task_progress(
             self, TaskStage.QUALITY_CHECKING, 70, "Running quality check..."
@@ -225,6 +273,7 @@ def preprocess_and_check(self, extract_result: Dict[str, Any]) -> Dict[str, Any]
             **extract_result,
             "documents": serialized_processed_docs,
             "quality_report": quality_report,
+            "pending_preprocessing_count": pending_count,
         }
 
     except ConnectionError as exc:
@@ -255,7 +304,8 @@ def chunk_and_store(self, preprocess_result: Dict[str, Any]) -> Dict[str, Any]:
         Dict with final result including db_info, quality_report, file_hash, and chunk_count.
     """
     try:
-        loader, preprocessor, checker, splitter, vector_store = _get_services()
+        # Load vector services (includes embedding model) - AFTER preprocessing
+        splitter, vector_store = _get_vector_services()
 
         # Deserialize processed documents
         documents = [

@@ -1,5 +1,6 @@
 """Centralized configuration using Pydantic BaseSettings."""
 
+import json
 import os
 from functools import lru_cache
 from typing import List, Tuple
@@ -35,6 +36,67 @@ class Settings(BaseSettings):
         description="Moonshot API base URL (OpenAI compatible)",
     )
     MOONSHOT_MODEL: str = Field(default="kimi-k2.5", description="Moonshot model name")
+
+    # LLM preprocessing fallback chain
+    LLM_FALLBACK_MAX_RETRIES: int = Field(
+        default=3,
+        description="Max retries per LLM provider before degrading to the next",
+    )
+    LLM_FALLBACK_RETRY_DELAY: float = Field(
+        default=2.0,
+        description="Base delay in seconds between retries (exponential backoff)",
+    )
+    LLM_FALLBACK_CHAIN: str = Field(
+        default="",
+        description=(
+            "JSON array defining the LLM fallback providers (after the primary DashScope). "
+            'Each element: {"name": "...", "api_key_env": "...", "base_url": "...", "model": "..."}. '
+            "api_key_env references another env var name that holds the actual key. "
+            'Example: [{"name":"kimi","api_key_env":"MOONSHOT_API_KEY","base_url":"https://api.moonshot.cn/v1","model":"kimi-k2.5"}]'
+        ),
+    )
+
+    def get_fallback_chain(self) -> list:
+        """Parse LLM_FALLBACK_CHAIN into a list of provider dicts.
+
+        Each dict contains: name, api_key, base_url, model.
+        Falls back to MOONSHOT_* settings for backward compatibility when
+        LLM_FALLBACK_CHAIN is empty but MOONSHOT_API_KEY is set.
+        """
+        if self.LLM_FALLBACK_CHAIN.strip():
+            try:
+                chain = json.loads(self.LLM_FALLBACK_CHAIN)
+                resolved = []
+                for entry in chain:
+                    resolved.append(
+                        {
+                            "name": entry["name"],
+                            "api_key": os.getenv(entry["api_key_env"], ""),
+                            "base_url": entry["base_url"],
+                            "model": entry["model"],
+                        }
+                    )
+                return resolved
+            except (json.JSONDecodeError, KeyError) as exc:
+                import logging
+
+                logging.getLogger(__name__).error(
+                    "Failed to parse LLM_FALLBACK_CHAIN: %s — falling back to defaults",
+                    exc,
+                )
+
+        # Backward compatibility: auto-build from legacy MOONSHOT_* fields
+        if self.MOONSHOT_API_KEY:
+            return [
+                {
+                    "name": "kimi",
+                    "api_key": self.MOONSHOT_API_KEY,
+                    "base_url": self.MOONSHOT_BASE_URL,
+                    "model": self.MOONSHOT_MODEL,
+                }
+            ]
+
+        return []
 
     # Vector Store
     COLLECTION_NAME: str = Field(

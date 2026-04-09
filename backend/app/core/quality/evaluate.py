@@ -20,7 +20,9 @@ from typing import NamedTuple
 
 # Ensure project root is on sys.path
 project_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    )
 )
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
@@ -41,12 +43,13 @@ logger = logging.getLogger(__name__)
 
 class ModelResult(NamedTuple):
     """Container for one model's preprocessing + check outcome."""
+
     name: str
     model: str
     chunks: list
-    check_result: object          # CheckResult
-    elapsed_preprocess: float     # seconds spent in preprocessing
-    elapsed_check: float          # seconds spent in quality checking
+    check_result: object  # CheckResult
+    elapsed_preprocess: float  # seconds spent in preprocessing
+    elapsed_check: float  # seconds spent in quality checking
 
 
 def _process_chunks_sync(
@@ -56,7 +59,7 @@ def _process_chunks_sync(
     """Apply LLM processing to each chunk (synchronous)."""
     return [
         Document(
-            page_content=preprocessor._qwen_process(chunk.page_content),
+            page_content=preprocessor._llm_process(chunk.page_content),
             metadata=chunk.metadata,
         )
         for chunk in chunks
@@ -73,6 +76,7 @@ def _reduction(before: int, after: int) -> tuple[int, float]:
 # ------------------------------------------------------------------
 # Async helpers
 # ------------------------------------------------------------------
+
 
 async def _process_model_async(
     name: str,
@@ -94,18 +98,25 @@ async def _process_model_async(
     # --- Preprocessing (in thread) ---
     t0 = time.perf_counter()
     processed_chunks = await loop.run_in_executor(
-        executor, _process_chunks_sync, preprocessor, chunks,
+        executor,
+        _process_chunks_sync,
+        preprocessor,
+        chunks,
     )
     elapsed_preprocess = time.perf_counter() - t0
     logger.info(
         "[%s] 预处理完成, 耗时 %.2f 秒 (%.2f 秒/块)",
-        name, elapsed_preprocess, elapsed_preprocess / max(len(chunks), 1),
+        name,
+        elapsed_preprocess,
+        elapsed_preprocess / max(len(chunks), 1),
     )
 
     # --- Quality check (in thread) ---
     t1 = time.perf_counter()
     check_result = await loop.run_in_executor(
-        executor, checker.check_documents, processed_chunks,
+        executor,
+        checker.check_documents,
+        processed_chunks,
     )
     elapsed_check = time.perf_counter() - t1
     logger.info("[%s] 质量检查完成, 耗时 %.2f 秒", name, elapsed_check)
@@ -178,7 +189,9 @@ async def _evaluate_async(
     chunks = splitter.split(raw_doc)
     logger.info(
         "文档已分块: 共 %d 个块 (chunk_size=%d, chunk_overlap=%d)",
-        len(chunks), splitter.chunk_size, splitter.chunk_overlap,
+        len(chunks),
+        splitter.chunk_size,
+        splitter.chunk_overlap,
     )
 
     # --- 1. Check original chunks (before any preprocessing) ---
@@ -199,20 +212,34 @@ async def _evaluate_async(
     total_start = time.perf_counter()
 
     plus_task = _process_model_async(
-        "Qwen-Plus", settings.LLM_MODEL,
-        preprocessor_plus, chunks, checker, executor,
+        "Qwen-Plus",
+        settings.LLM_MODEL,
+        preprocessor_plus,
+        chunks,
+        checker,
+        executor,
     )
     max_task = _process_model_async(
-        "Qwen3-Max", settings.LLM_MODEL_MAX,
-        preprocessor_max, chunks, checker, executor,
+        "Qwen3-Max",
+        settings.LLM_MODEL_MAX,
+        preprocessor_max,
+        chunks,
+        checker,
+        executor,
     )
     kimi_task = _process_model_async(
-        "Kimi-K2.5", settings.MOONSHOT_MODEL,
-        preprocessor_kimi, chunks, checker, executor,
+        "Kimi-K2.5",
+        settings.MOONSHOT_MODEL,
+        preprocessor_kimi,
+        chunks,
+        checker,
+        executor,
     )
 
     plus_res, max_res, kimi_res = await asyncio.gather(
-        plus_task, max_task, kimi_task,
+        plus_task,
+        max_task,
+        kimi_task,
     )
 
     total_elapsed = time.perf_counter() - total_start
@@ -220,13 +247,16 @@ async def _evaluate_async(
 
     # --- Build report ---
     plus_reduced, plus_rate = _reduction(
-        original_result.total_errors, plus_res.check_result.total_errors,
+        original_result.total_errors,
+        plus_res.check_result.total_errors,
     )
     max_reduced, max_rate = _reduction(
-        original_result.total_errors, max_res.check_result.total_errors,
+        original_result.total_errors,
+        max_res.check_result.total_errors,
     )
     kimi_reduced, kimi_rate = _reduction(
-        original_result.total_errors, kimi_res.check_result.total_errors,
+        original_result.total_errors,
+        kimi_res.check_result.total_errors,
     )
 
     report = {
@@ -275,32 +305,50 @@ async def _evaluate_async(
     logger.info(
         "Qwen-Plus  处理后 : %d 个错误  减少 %d 个 (%.1f%%)  "
         "预处理 %.2f 秒  检查 %.2f 秒",
-        plus_res.check_result.total_errors, plus_reduced, plus_rate,
-        plus_res.elapsed_preprocess, plus_res.elapsed_check,
+        plus_res.check_result.total_errors,
+        plus_reduced,
+        plus_rate,
+        plus_res.elapsed_preprocess,
+        plus_res.elapsed_check,
     )
     logger.info(
         "Qwen3-Max  处理后 : %d 个错误  减少 %d 个 (%.1f%%)  "
         "预处理 %.2f 秒  检查 %.2f 秒",
-        max_res.check_result.total_errors, max_reduced, max_rate,
-        max_res.elapsed_preprocess, max_res.elapsed_check,
+        max_res.check_result.total_errors,
+        max_reduced,
+        max_rate,
+        max_res.elapsed_preprocess,
+        max_res.elapsed_check,
     )
     logger.info(
         "Kimi-K2.5  处理后 : %d 个错误  减少 %d 个 (%.1f%%)  "
         "预处理 %.2f 秒  检查 %.2f 秒",
-        kimi_res.check_result.total_errors, kimi_reduced, kimi_rate,
-        kimi_res.elapsed_preprocess, kimi_res.elapsed_check,
+        kimi_res.check_result.total_errors,
+        kimi_reduced,
+        kimi_rate,
+        kimi_res.elapsed_preprocess,
+        kimi_res.elapsed_check,
     )
     logger.info("-" * 60)
     logger.info(
-        "三模型并行总耗时: %.2f 秒  "
-        "(串行预估: %.2f 秒, 加速比: %.1fx)",
+        "三模型并行总耗时: %.2f 秒  (串行预估: %.2f 秒, 加速比: %.1fx)",
         total_elapsed,
-        (plus_res.elapsed_preprocess + plus_res.elapsed_check
-         + max_res.elapsed_preprocess + max_res.elapsed_check
-         + kimi_res.elapsed_preprocess + kimi_res.elapsed_check),
-        (plus_res.elapsed_preprocess + plus_res.elapsed_check
-         + max_res.elapsed_preprocess + max_res.elapsed_check
-         + kimi_res.elapsed_preprocess + kimi_res.elapsed_check)
+        (
+            plus_res.elapsed_preprocess
+            + plus_res.elapsed_check
+            + max_res.elapsed_preprocess
+            + max_res.elapsed_check
+            + kimi_res.elapsed_preprocess
+            + kimi_res.elapsed_check
+        ),
+        (
+            plus_res.elapsed_preprocess
+            + plus_res.elapsed_check
+            + max_res.elapsed_preprocess
+            + max_res.elapsed_check
+            + kimi_res.elapsed_preprocess
+            + kimi_res.elapsed_check
+        )
         / max(total_elapsed, 0.01),
     )
     logger.info("=" * 60)
@@ -311,6 +359,7 @@ async def _evaluate_async(
 # ------------------------------------------------------------------
 # Public synchronous wrapper
 # ------------------------------------------------------------------
+
 
 def evaluate(file_path: str, chunk_size: int = None, chunk_overlap: int = None) -> dict:
     """Run evaluation pipeline on a single txt file.
@@ -333,14 +382,15 @@ def main():
     parser = argparse.ArgumentParser(
         description="评估 Qwen-Plus、Qwen3-Max 和 Kimi-K2.5 预处理各自的错误消除效果 (并行)"
     )
-    parser.add_argument(
-        "--file", required=True, help="待评估的 txt 文件路径"
-    )
+    parser.add_argument("--file", required=True, help="待评估的 txt 文件路径")
     parser.add_argument(
         "--chunk-size", type=int, default=None, help="分块大小 (默认使用 settings 配置)"
     )
     parser.add_argument(
-        "--chunk-overlap", type=int, default=None, help="分块重叠 (默认使用 settings 配置)"
+        "--chunk-overlap",
+        type=int,
+        default=None,
+        help="分块重叠 (默认使用 settings 配置)",
     )
     args = parser.parse_args()
     evaluate(args.file, chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap)

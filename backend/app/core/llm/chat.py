@@ -5,6 +5,8 @@ from typing import List, Dict, Any
 
 from openai import OpenAI
 
+from backend.app.exceptions.handlers import LLMError
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,7 +76,7 @@ class ChatManager:
             return answer
         except Exception as exc:
             logger.error("LLM generation failed: %s", exc)
-            return f"抱歉，生成回答时出现错误：{exc}"
+            raise LLMError(f"Generation failed: {exc}") from exc
 
     def _generate_fallback(self, question: str) -> str:
         """Generate answer using general knowledge when no contexts found."""
@@ -98,4 +100,4 @@ class ChatManager:
             return completion.choices[0].message.content
         except Exception as exc:
             logger.error("Fallback generation failed: %s", exc)
-            return "未找到与问题相关的信息。请尝试重新表述您的问题。"
+            raise LLMError(f"Fallback generation failed: {exc}") from exc

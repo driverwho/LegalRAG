@@ -202,7 +202,9 @@ class DocumentLoader:
             import time
 
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            logger.info("[PDF] 开始加载: %s (%.1f MB)", Path(file_path).name, file_size_mb)
+            logger.info(
+                "[PDF] 开始加载: %s (%.1f MB)", Path(file_path).name, file_size_mb
+            )
 
             start = time.time()
             loader = PyPDFLoader(file_path)
@@ -214,7 +216,8 @@ class DocumentLoader:
             elapsed = time.time() - start
             logger.info(
                 "[PDF] 加载完成: 共 %d 页, 耗时 %.1f 秒",
-                len(docs), elapsed,
+                len(docs),
+                elapsed,
             )
             return self._enrich_metadata(docs, file_path, "pdf")
         except Exception as exc:
@@ -271,7 +274,6 @@ class DocumentLoader:
 
             loader = RapidOCRPDFLoader(file_path)
             docs = loader.load()
-            print("ocr_pdf loading\n")
             for i, doc in enumerate(docs):
                 doc.metadata["page_number"] = i + 1
             return self._enrich_metadata(docs, file_path, "pdf")
@@ -295,7 +297,6 @@ class DocumentLoader:
             from backend.app.core.document.docx_loader import RapidOCRDocLoader
 
             loader = RapidOCRDocLoader(file_path)
-            print("OCR_DOCX loadding.")
             docs = loader.load()
             return self._enrich_metadata(docs, file_path, "docx")
         except ImportError as exc:
