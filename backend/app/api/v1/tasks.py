@@ -1,4 +1,4 @@
-"""Task status query API endpoints."""
+"""Task status query and control API endpoints."""
 
 import logging
 from typing import Optional
@@ -74,3 +74,64 @@ async def get_task_status(task_id: str):
         raise HTTPException(
             status_code=500, detail=f"Failed to query task status: {exc}"
         )
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str):
+    """Cancel a running or pending document processing task.
+
+    This will revoke the task and terminate it if it's currently running.
+    Note: Tasks that have already completed cannot be cancelled.
+    """
+    try:
+        result = AsyncResult(task_id, app=celery_app)
+
+        # Check if task exists
+        if not result.id:
+            raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+        # Check current state
+        current_state = result.state
+        if current_state == "SUCCESS":
+            return {
+                "success": False,
+                "message": "Task already completed, cannot cancel",
+                "task_id": task_id,
+                "status": current_state,
+            }
+
+        if current_state == "FAILURE":
+            return {
+                "success": False,
+                "message": "Task already failed, cannot cancel",
+                "task_id": task_id,
+                "status": current_state,
+            }
+
+        if current_state == "REVOKED":
+            return {
+                "success": False,
+                "message": "Task already cancelled",
+                "task_id": task_id,
+                "status": current_state,
+            }
+
+        # Revoke the task
+        # terminate=True: send SIGTERM to worker process if task is running
+        # wait=True: wait for the task to be revoked
+        result.revoke(terminate=True, wait=False)
+
+        logger.info(f"Task {task_id} cancelled (state was: {current_state})")
+
+        return {
+            "success": True,
+            "message": f"Task cancelled successfully (was {current_state})",
+            "task_id": task_id,
+            "previous_status": current_state,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error cancelling task {task_id}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to cancel task: {exc}")

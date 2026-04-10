@@ -1,7 +1,10 @@
 """Unified document loader supporting multiple file formats."""
 
+import hashlib
 import os
 import logging
+import uuid
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
@@ -164,16 +167,43 @@ class DocumentLoader:
     # Private loader strategies
     # ------------------------------------------------------------------
 
+    def _compute_file_hash(self, file_path: str) -> str:
+        """Compute SHA256 hash of a file for deduplication."""
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for block in iter(lambda: f.read(8192), b""):
+                sha256.update(block)
+        return sha256.hexdigest()
+
     def _enrich_metadata(
         self, documents: List[Document], file_path: str, file_type: str, **extra
     ) -> List[Document]:
-        """Attach standard metadata to every loaded document."""
+        """Attach standard metadata to every loaded document.
+
+        Metadata fields:
+        - source: file path for provenance
+        - file_type: detected file type
+        - file_name: basename of the file
+        - doc_id: unique identifier for the source document (shared across pages)
+        - file_hash: SHA256 hash for deduplication
+        - file_size: file size in bytes
+        - uploaded_at: ISO 8601 timestamp when the file was loaded
+        """
+        doc_id = str(uuid.uuid4())
+        file_hash = self._compute_file_hash(file_path)
+        file_size = os.path.getsize(file_path)
+        uploaded_at = datetime.now().isoformat()
+
         for doc in documents:
             doc.metadata.update(
                 {
                     "source": file_path,
                     "file_type": file_type,
                     "file_name": Path(file_path).name,
+                    "doc_id": doc_id,
+                    "file_hash": file_hash,
+                    "file_size": file_size,
+                    "uploaded_at": uploaded_at,
                     **extra,
                 }
             )

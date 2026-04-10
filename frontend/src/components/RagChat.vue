@@ -59,16 +59,29 @@
           <div v-for="task in taskList" :key="task.taskId" class="task-item">
             <div class="task-header">
               <span class="task-filename">{{ task.fileName }}</span>
-              <span :class="['task-status', task.status.toLowerCase()]">{{ taskStatusLabel(task.status) }}</span>
+              <div class="task-actions">
+                <span :class="['task-status', task.status.toLowerCase()]">{{ taskStatusLabel(task.status) }}</span>
+                <!-- 取消按钮：只在任务可取消时显示 -->
+                <el-button
+                  v-if="canCancelTask(task.status)"
+                  type="danger"
+                  size="small"
+                  :loading="task.cancelling"
+                  @click="cancelTask(task.taskId)"
+                  class="cancel-btn"
+                >
+                  取消
+                </el-button>
+              </div>
             </div>
             <el-progress 
               :percentage="task.progress || 0" 
-              :status="task.status === 'SUCCESS' ? 'success' : task.status === 'FAILED' ? 'exception' : ''"
+              :status="task.status === 'SUCCESS' ? 'success' : task.status === 'FAILED' || task.status === 'REVOKED' ? 'exception' : ''"
               :stroke-width="6"
               class="task-progress"
             />
             <div v-if="task.stage" class="task-stage">{{ task.stage }}</div>
-            <div v-if="task.message && task.status === 'FAILED'" class="task-error">{{ task.message }}</div>
+            <div v-if="task.message && (task.status === 'FAILED' || task.status === 'REVOKED')" class="task-error">{{ task.message }}</div>
           </div>
         </div>
       </div>
@@ -271,6 +284,7 @@ const submitUpload = async () => {
           progress: 0,
           stage: null,
           message: response.data.message,
+          cancelling: false,
         }
         taskList.value.push(task)
         startPolling(task.taskId)
@@ -284,6 +298,7 @@ const submitUpload = async () => {
         progress: 0,
         stage: null,
         message: error.response?.data?.detail || '上传失败',
+        cancelling: false,
       })
     }
   }
@@ -395,8 +410,45 @@ const taskStatusLabel = (status) => {
     'PROGRESS': '处理中',
     'SUCCESS': '已完成',
     'FAILED': '失败',
+    'REVOKED': '已取消',
   }
   return labels[status] || status
+}
+
+// 判断任务是否可以取消
+const canCancelTask = (status) => {
+  return status !== 'SUCCESS' && status !== 'FAILED' && status !== 'REVOKED'
+}
+
+// 取消任务
+const cancelTask = async (taskId) => {
+  const task = taskList.value.find(t => t.taskId === taskId)
+  if (!task) return
+  
+  // 标记为正在取消
+  task.cancelling = true
+  
+  try {
+    const response = await axios.post(`${API_BASE}/tasks/${taskId}/cancel`)
+    const data = response.data
+    
+    if (data.success) {
+      ElMessage.success(data.message)
+      // 更新任务状态
+      task.status = 'REVOKED'
+      task.message = '任务已取消'
+      task.progress = 0
+      // 停止轮询
+      stopPolling(taskId)
+    } else {
+      ElMessage.info(data.message)
+    }
+  } catch (error) {
+    console.error(`Cancel task failed for ${taskId}:`, error)
+    ElMessage.error(error.response?.data?.detail || '取消任务失败')
+  } finally {
+    task.cancelling = false
+  }
 }
 
 // Cleanup on unmount
@@ -924,6 +976,19 @@ onUnmounted(() => {
 .task-status.progress { background: rgba(64, 158, 255, 0.2); color: #409eff; }
 .task-status.success { background: rgba(103, 194, 58, 0.2); color: #67c23a; }
 .task-status.failed { background: rgba(245, 108, 108, 0.2); color: #f56c6c; }
+.task-status.revoked { background: rgba(230, 162, 60, 0.2); color: #e6a23c; }
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cancel-btn {
+  padding: 2px 8px !important;
+  font-size: 11px !important;
+  height: 22px !important;
+}
 
 .task-stage {
   font-size: 11px;

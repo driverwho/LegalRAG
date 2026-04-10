@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import os
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from celery import chain
@@ -246,7 +247,7 @@ def preprocess_and_check(self, extract_result: Dict[str, Any]) -> Dict[str, Any]
         )
 
         # Run quality check
-        quality_report = checker.compare_before_after(documents, processed_documents)
+        '''quality_report = checker.compare_before_after(documents, processed_documents)
 
         # Log quality report summary
         before_errors = quality_report["before"]["total_errors"]
@@ -261,7 +262,7 @@ def preprocess_and_check(self, extract_result: Dict[str, Any]) -> Dict[str, Any]
             errors_reduced,
             reduction_rate,
         )
-
+        '''
         # Serialize processed documents
         serialized_processed_docs = [
             {"page_content": doc.page_content, "metadata": doc.metadata}
@@ -272,7 +273,7 @@ def preprocess_and_check(self, extract_result: Dict[str, Any]) -> Dict[str, Any]
         return {
             **extract_result,
             "documents": serialized_processed_docs,
-            "quality_report": quality_report,
+            ''' "quality_report": quality_report, '''
             "pending_preprocessing_count": pending_count,
         }
 
@@ -317,6 +318,11 @@ def chunk_and_store(self, preprocess_result: Dict[str, Any]) -> Dict[str, Any]:
 
         # Split documents into chunks
         chunks = splitter.split(documents)
+
+        # Stamp processed_at on each chunk before vectorization
+        processed_at = datetime.now().isoformat()
+        for chunk in chunks:
+            chunk.metadata["processed_at"] = processed_at
 
         update_task_progress(
             self, TaskStage.VECTORIZING, 85, f"Vectorizing {len(chunks)} chunks..."

@@ -1,11 +1,14 @@
 """Document preprocessing pipeline: regex-based cleaning + multi-level LLM fallback processing."""
 
+import json
 import logging
+import os
 import re
 import time
 import unicodedata
 from dataclasses import dataclass
-from typing import List, Optional
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 from langchain_core.documents import Document
 from openai import OpenAI
@@ -190,7 +193,7 @@ class DocumentPreprocessor:
 
         raise last_exc  # type: ignore[misc]
 
-    def _llm_process(self, text: str) -> str:
+    def _llm_process(self, text: str) -> Tuple[str, str]:
         """Process text through the LLM fallback chain.
 
         Tries each provider in order (DashScope → Kimi → ...).
@@ -200,7 +203,7 @@ class DocumentPreprocessor:
             text: Input text to process.
 
         Returns:
-            Processed text from the first successful provider.
+            Tuple of (processed_text, provider_name) from the first successful provider.
 
         Raises:
             LLMAllProvidersFailedError: When every provider in the chain exhausted retries.
@@ -216,6 +219,7 @@ class DocumentPreprocessor:
             "2. **统一法律引用格式**：将文中对法律法规的引用，统一为《中华人民共和国XXXX法》第X条的格式。\n"
             "3. **补全常见法律简称**：如将《刑法》补全为《中华人民共和国刑法》，但需根据上下文判断，避免错误补全。\n"
             "4. 保持原文段落结构，除上述修改外，不做任何删减或转写。\n"
+            "5.仅回复修改后的原文，不额外补充说明。\n"
         )
 
         messages = [
@@ -235,7 +239,7 @@ class DocumentPreprocessor:
                     )
                 else:
                     logger.debug("LLM processing completed via [%s]", provider.name)
-                return result
+                return result, provider.name
             except Exception as exc:
                 provider_errors.append(f"{provider.name}: {exc}")
                 logger.warning(
@@ -247,11 +251,14 @@ class DocumentPreprocessor:
         error_summary = "; ".join(provider_errors)
         raise LLMAllProvidersFailedError(f"All LLM providers failed: {error_summary}")
 
-    def _llm_process_chunked(self, text: str) -> str:
+    def _llm_process_chunked(self, text: str) -> Tuple[str, str]:
         """Process long text in chunks and rejoin results.
 
         Splits on paragraph boundaries when possible to maintain coherence.
         Each chunk goes through the full fallback chain independently.
+
+        Returns:
+            Tuple of (rejoined_text, last_provider_name).
 
         Raises:
             LLMAllProvidersFailedError: If any chunk fails all providers.
@@ -299,15 +306,17 @@ class DocumentPreprocessor:
 
         # Process each chunk
         processed_chunks = []
+        last_provider = "unknown"
         for idx, chunk in enumerate(chunks, 1):
             logger.debug(
                 "Processing chunk %d/%d (%d chars)", idx, len(chunks), len(chunk)
             )
-            processed = self._llm_process(chunk)
+            processed, provider_name = self._llm_process(chunk)
             processed_chunks.append(processed)
+            last_provider = provider_name
 
         # Rejoin with appropriate separators
-        return "\n\n".join(processed_chunks)
+        return "\n\n".join(processed_chunks), last_provider
 
     def preprocess(self, documents: List[Document]) -> List[Document]:
         """Process documents through the preprocessing pipeline.
@@ -320,6 +329,8 @@ class DocumentPreprocessor:
             and updated metadata:
             - preprocessed: True if LLM succeeded
             - preprocessed_by: provider name that handled the text (e.g. "dashscope", "kimi")
+            - preprocessed_at: ISO 8601 timestamp of preprocessing completion
+            - preprocessor_version: version tag of the regex preprocessor
             - pending_preprocessing: True if all LLM providers failed (text only regex-cleaned)
         """
         if not documents:
@@ -336,10 +347,14 @@ class DocumentPreprocessor:
 
                 # Stage 2: LLM processing with fallback chain (if enabled)
                 metadata = dict(doc.metadata)
+                metadata["preprocessor_version"] = "regex_v1"
+
                 if self.enable_llm_preprocessing:
                     try:
-                        content = self._llm_process(content)
+                        content, provider_name = self._llm_process(content)
                         metadata["preprocessed"] = True
+                        metadata["preprocessed_by"] = provider_name
+                        metadata["preprocessed_at"] = datetime.now().isoformat()
                     except LLMAllProvidersFailedError as llm_exc:
                         logger.warning(
                             "Document %d/%d: all LLM providers failed — marking pending. %s",
@@ -348,11 +363,15 @@ class DocumentPreprocessor:
                             llm_exc,
                         )
                         metadata["preprocessed"] = False
+                        metadata["preprocessed_by"] = None
+                        metadata["preprocessed_at"] = datetime.now().isoformat()
                         metadata["pending_preprocessing"] = True
                         metadata["preprocessing_error"] = str(llm_exc)
                         # content keeps regex-cleaned version
                 else:
                     metadata["preprocessed"] = False
+                    metadata["preprocessed_by"] = None
+                    metadata["preprocessed_at"] = datetime.now().isoformat()
 
                 processed_doc = Document(page_content=content, metadata=metadata)
                 processed_docs.append(processed_doc)
@@ -391,4 +410,54 @@ class DocumentPreprocessor:
                 "Preprocessing complete: %d documents processed", len(processed_docs)
             )
 
+        # Debug: Save preprocessing results to txt file
+        self._save_debug_output(processed_docs)
+
         return processed_docs
+
+    def _save_debug_output(self, processed_docs: List[Document]) -> None:
+        """Save preprocessing results to a debug txt file.
+
+        Args:
+            processed_docs: List of processed Document objects.
+        """
+        try:
+            # Create debug output directory if not exists
+            debug_dir = os.path.join(os.getcwd(), "debug_output")
+            os.makedirs(debug_dir, exist_ok=True)
+
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            debug_file = os.path.join(debug_dir, f"preprocess_debug_{timestamp}.txt")
+
+            with open(debug_file, "w", encoding="utf-8") as f:
+                f.write("=" * 80 + "\n")
+                f.write("DOCUMENT PREPROCESSING DEBUG OUTPUT\n")
+                f.write(f"Generated at: {datetime.now().isoformat()}\n")
+                f.write(f"Total documents: {len(processed_docs)}\n")
+                f.write("=" * 80 + "\n\n")
+
+                for idx, doc in enumerate(processed_docs, 1):
+                    f.write(f"\n{'=' * 80}\n")
+                    f.write(f"DOCUMENT {idx}/{len(processed_docs)}\n")
+                    f.write(f"{'=' * 80}\n\n")
+
+                    # Write metadata section
+                    f.write("[METADATA]\n")
+                    f.write("-" * 40 + "\n")
+                    metadata_str = json.dumps(
+                        doc.metadata, ensure_ascii=False, indent=2, default=str
+                    )
+                    f.write(metadata_str)
+                    f.write("\n\n")
+
+                    # Write content section
+                    f.write("[CONTENT]\n")
+                    f.write("-" * 40 + "\n")
+                    f.write(doc.page_content)
+                    f.write("\n\n")
+
+            logger.info("Debug output saved to: %s", debug_file)
+
+        except Exception as exc:
+            logger.warning("Failed to save debug output: %s", exc)
