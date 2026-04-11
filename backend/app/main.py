@@ -6,7 +6,9 @@ import logging
 
 # Add the project root directory to sys.path to enable absolute imports
 # This ensures that 'backend' module can be found when running from any directory
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -16,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.config.settings import get_settings
 from backend.app.api.router import api_router
 from backend.app.exceptions.handlers import RAGException, rag_exception_handler
+from backend.app.core.database import init_db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,6 +59,10 @@ def create_app() -> FastAPI:
     # Ensure required directories exist
     os.makedirs(settings.UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(settings.CHROMADB_PERSIST_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(settings.SQLITE_DB_PATH), exist_ok=True)
+
+    # Initialize database tables
+    init_db()
 
     logger.info("RAG Backend Service initialized")
     logger.info(
@@ -83,4 +90,3 @@ if __name__ == "__main__":
         port=settings.APP_PORT,
         reload=settings.DEBUG,
     )
-

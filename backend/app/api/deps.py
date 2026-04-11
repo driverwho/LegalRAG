@@ -6,11 +6,34 @@ from backend.app.config.settings import get_settings
 from backend.app.core.vector_store.chroma import ChromaVectorStore
 from backend.app.core.llm.embedding import EmbeddingManager
 from backend.app.core.llm.chat import ChatManager
+from backend.app.core.llm.contextual_chat import ContextualChatManager
 from backend.app.core.retriever.rag import RAGPipeline
 from backend.app.core.document.loader import DocumentLoader
 from backend.app.core.document.splitter import DocumentSplitter
 from backend.app.core.document.preprocessor import DocumentPreprocessor
 from backend.app.core.quality.checker import DocumentChecker
+from backend.app.core.database.session_service import SessionService
+from backend.app.core.context import ContextManager, ContextConfig
+
+
+@lru_cache()
+def get_context_manager() -> ContextManager:
+    """Create a ContextManager wired from Settings."""
+    session_service = get_session_service()
+    config = ContextConfig.from_settings()
+    return ContextManager(session_service, config)
+
+
+@lru_cache()
+def get_contextual_chat_manager() -> ContextualChatManager:
+    """Create a ContextualChatManager with context management support."""
+    settings = get_settings()
+    return ContextualChatManager(
+        api_key=settings.DASHSCOPE_API_KEY,
+        base_url=settings.LLM_BASE_URL,
+        model=settings.LLM_MODEL,
+        context_manager=get_context_manager(),
+    )
 
 
 @lru_cache()
@@ -86,3 +109,8 @@ def get_document_checker() -> DocumentChecker:
         model=settings.LLM_MODEL,
         enable_llm_check=settings.ENABLE_LLM_QUALITY_CHECK,
     )
+
+
+def get_session_service() -> SessionService:
+    """Create a SessionService for chat history management."""
+    return SessionService()

@@ -106,6 +106,12 @@ class Settings(BaseSettings):
         default="./chroma_db", description="ChromaDB persistence directory"
     )
 
+    # SQLite Database
+    SQLITE_DB_PATH: str = Field(
+        default="./data/chat_history.db",
+        description="SQLite database path for chat history",
+    )
+
     # File Upload
     UPLOAD_FOLDER: str = Field(
         default="./temp/vector_uploads", description="Temporary upload directory"
@@ -159,6 +165,25 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = Field(
         default="redis://localhost:6379/1",
         description="Celery result backend URL (Redis)",
+    )
+
+    # Context Window
+    CONTEXT_WINDOW_SIZE: int = Field(
+        default=30000,
+        description="Total context window size of the target LLM (in tokens)",
+    )
+    CONTEXT_RESERVED_OUTPUT_TOKENS: int = Field(
+        default=2000,
+        description="Tokens reserved for the model's response generation",
+    )
+    CONTEXT_PROTECTED_ROUNDS: int = Field(
+        default=2,
+        description="Number of most-recent conversation rounds never compressed",
+    )
+    # Model used for context compression (defaults to primary LLM)
+    COMPACT_LLM_MODEL: str = Field(
+        default="",
+        description="Model for context compression; defaults to LLM_MODEL if empty",
     )
 
     # Retrieval

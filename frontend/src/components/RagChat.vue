@@ -4,84 +4,136 @@
     <aside class="sidebar">
       <div class="logo-area">
         <div class="logo-icon">🧠</div>
-        <h1>RAG 智能助手</h1>
+        <h1>法律RAG智能助手</h1>
       </div>
 
       <div class="sidebar-content">
-        <div class="section-title">知识库设置</div>
+        <!-- 会话列表部分 -->
+        <div class="section-title session-section-header">
+          <span>对话历史</span>
+          <el-button 
+            type="primary" 
+            link 
+            size="small" 
+            @click="createSession"
+            :loading="loadingSessions"
+            class="new-session-btn"
+          >
+            <el-icon><Plus /></el-icon>
+            新建对话
+          </el-button>
+        </div>
         
-        <div class="upload-box">
-          <el-upload
-            class="upload-dragger"
-            drag
-            action="#"
-            :auto-upload="false"
-            :on-change="handleFileChange"
-            :show-file-list="true"
-            :multiple="true"
-            :limit="10"
-            :on-exceed="handleExceed"
-            ref="uploadRef"
+        <div class="sessions-list" v-loading="loadingSessions">
+          <div v-if="sessions.length === 0" class="no-sessions">
+            <el-icon><ChatLineRound /></el-icon>
+            <span>暂无对话，点击上方新建</span>
+          </div>
+          <div 
+            v-for="session in sessions" 
+            :key="session.id" 
+            :class="['session-item', { active: activeSessionId === session.id }]"
+            @click="selectSession(session.id)"
           >
-            <el-icon class="upload-icon"><UploadFilled /></el-icon>
-            <div class="upload-text">
-              <p>点击或拖拽文件至此</p>
-              <span>支持 PDF, DOCX, TXT, CSV</span>
+            <div class="session-info">
+              <div class="session-title" :title="session.title">{{ session.title || '未命名对话' }}</div>
+              <div class="session-date">{{ formatDate(session.created_at) }}</div>
             </div>
-          </el-upload>
+            <el-button
+              v-show="activeSessionId === session.id"
+              type="danger"
+              link
+              size="small"
+              class="delete-session-btn"
+              @click.stop="deleteSession(session.id)"
+            >
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </div>
         </div>
 
-        <div class="form-group">
-          <label>集合名称</label>
-          <el-input 
-            v-model="collectionName" 
-            placeholder="例如: agent_rag" 
-            class="custom-input"
-          >
-            <template #prefix>
-              <el-icon><Collection /></el-icon>
-            </template>
-          </el-input>
-        </div>
+        <!-- 知识库设置部分（可折叠） -->
+        <div class="kb-settings-section">
+          <div class="kb-settings-header" @click="kbSettingsExpanded = !kbSettingsExpanded">
+            <div class="section-title kb-title">知识库设置</div>
+            <el-icon :class="['expand-icon', { expanded: kbSettingsExpanded }]"><ArrowRight /></el-icon>
+          </div>
+          
+          <div v-show="kbSettingsExpanded" class="kb-settings-content">
+            <div class="upload-box">
+              <el-upload
+                class="upload-dragger"
+                drag
+                action="#"
+                :auto-upload="false"
+                :on-change="handleFileChange"
+                :show-file-list="true"
+                :multiple="true"
+                :limit="10"
+                :on-exceed="handleExceed"
+                ref="uploadRef"
+              >
+                <el-icon class="upload-icon"><UploadFilled /></el-icon>
+                <div class="upload-text">
+                  <p>点击或拖拽文件至此</p>
+                  <span>支持 PDF, DOCX, TXT, CSV</span>
+                </div>
+              </el-upload>
+            </div>
 
-        <el-button 
-          type="primary" 
-          class="action-btn upload-btn" 
-          :loading="uploading" 
-          @click="submitUpload"
-        >
-          {{ uploading ? '正在提交...' : '上传并处理' }}
-        </el-button>
+            <div class="form-group">
+              <label>集合名称</label>
+              <el-input 
+                v-model="collectionName" 
+                placeholder="例如: agent_rag" 
+                class="custom-input"
+              >
+                <template #prefix>
+                  <el-icon><Collection /></el-icon>
+                </template>
+              </el-input>
+            </div>
 
-        <!-- 任务进度列表 -->
-        <div v-if="taskList.length > 0" class="task-list">
-          <div class="section-title">处理进度</div>
-          <div v-for="task in taskList" :key="task.taskId" class="task-item">
-            <div class="task-header">
-              <span class="task-filename">{{ task.fileName }}</span>
-              <div class="task-actions">
-                <span :class="['task-status', task.status.toLowerCase()]">{{ taskStatusLabel(task.status) }}</span>
-                <!-- 取消按钮：只在任务可取消时显示 -->
-                <el-button
-                  v-if="canCancelTask(task.status)"
-                  type="danger"
-                  size="small"
-                  :loading="task.cancelling"
-                  @click="cancelTask(task.taskId)"
-                  class="cancel-btn"
-                >
-                  取消
-                </el-button>
+            <el-button 
+              type="primary" 
+              class="action-btn upload-btn" 
+              :loading="uploading" 
+              @click="submitUpload"
+            >
+              {{ uploading ? '正在提交...' : '上传并处理' }}
+            </el-button>
+
+            <!-- 任务进度列表 -->
+            <div v-if="taskList.length > 0" class="task-list">
+              <div class="section-title">处理进度</div>
+              <div v-for="task in taskList" :key="task.taskId" class="task-item">
+                <div class="task-header">
+                  <span class="task-filename">{{ task.fileName }}</span>
+                  <div class="task-actions">
+                    <span :class="['task-status', task.status.toLowerCase()]">{{ taskStatusLabel(task.status) }}</span>
+                    <!-- 取消按钮：只在任务可取消时显示 -->
+                    <el-button
+                      v-if="canCancelTask(task.status)"
+                      type="danger"
+                      size="small"
+                      :loading="task.cancelling"
+                      @click="cancelTask(task.taskId)"
+                      class="cancel-btn"
+                    >
+                      取消
+                    </el-button>
+                  </div>
+                </div>
+                <el-progress 
+                  :percentage="task.progress || 0" 
+                  :status="task.status === 'SUCCESS' ? 'success' : task.status === 'FAILED' || task.status === 'REVOKED' ? 'exception' : ''"
+                  :stroke-width="6"
+                  class="task-progress"
+                />
+                <div v-if="task.stage" class="task-stage">{{ task.stage }}</div>
+                <div v-if="task.message && (task.status === 'FAILED' || task.status === 'REVOKED')" class="task-error">{{ task.message }}</div>
               </div>
             </div>
-            <el-progress 
-              :percentage="task.progress || 0" 
-              :status="task.status === 'SUCCESS' ? 'success' : task.status === 'FAILED' || task.status === 'REVOKED' ? 'exception' : ''"
-              :stroke-width="6"
-              class="task-progress"
-            />
-            <div v-if="task.stage" class="task-stage">{{ task.stage }}</div>
-            <div v-if="task.message && (task.status === 'FAILED' || task.status === 'REVOKED')" class="task-error">{{ task.message }}</div>
           </div>
         </div>
       </div>
@@ -111,7 +163,7 @@
       <div class="messages-container" ref="messagesRef">
         <div v-if="messages.length === 0" class="welcome-screen">
           <div class="welcome-icon">👋</div>
-          <h3>你好！我是你的专属知识助手</h3>
+          <h3>你好！我是你的法律知识助手</h3>
           <p>请在左侧上传文档，然后在这里向我提问。</p>
           <div class="feature-list">
             <div class="feature-item">
@@ -205,13 +257,13 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onUnmounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { 
   UploadFilled, User, Service, Position, Collection, 
   CircleCheckFilled, Delete, Document, Search, ChatLineRound,
-  CollectionTag, ArrowDown
+  CollectionTag, ArrowDown, Plus, ArrowRight
 } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
 import MarkdownIt from 'markdown-it'
 
@@ -233,6 +285,12 @@ const messages = ref([])
 const thinking = ref(false)
 const messagesRef = ref(null)
 
+// Session management state
+const sessions = ref([])
+const activeSessionId = ref(null)
+const loadingSessions = ref(false)
+const kbSettingsExpanded = ref(false)  // 知识库设置展开/折叠
+
 // Markdown 渲染
 const renderMarkdown = (text) => {
   return md.render(text || '')
@@ -245,8 +303,47 @@ const toggleSources = (index) => {
 }
 
 // 清空历史
-const clearHistory = () => {
-  messages.value = []
+const clearHistory = async () => {
+  if (messages.value.length === 0) {
+    ElMessage.info('当前没有对话内容')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm('确定要清空当前对话吗？这将删除所有消息记录。', '确认清空', {
+      confirmButtonText: '清空',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    // 如果有活动会话，删除整个会话并创建新会话
+    if (activeSessionId.value) {
+      const oldSessionId = activeSessionId.value
+
+      // 删除旧会话
+      await axios.delete(`${API_BASE}/sessions/${oldSessionId}`)
+
+      // 从列表中移除
+      const index = sessions.value.findIndex(s => s.id === oldSessionId)
+      sessions.value.splice(index, 1)
+
+      // 创建新会话
+      const response = await axios.post(`${API_BASE}/sessions`, { title: '新对话' })
+      if (response.data.session) {
+        const newSession = response.data.session
+        sessions.value.unshift(newSession)
+        activeSessionId.value = newSession.id
+      }
+    }
+
+    messages.value = []
+    ElMessage.success('对话已清空')
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('清空对话失败:', error)
+      ElMessage.error('清空对话失败')
+    }
+  }
 }
 
 // File Upload Logic
@@ -316,12 +413,38 @@ const submitUpload = async () => {
 const sendMessage = async () => {
   const query = inputQuery.value.trim()
   if (!query || thinking.value) return
-  
+
+  // 如果没有活动会话，先创建一个
+  let sessionId = activeSessionId.value
+  if (!sessionId) {
+    try {
+      const response = await axios.post(`${API_BASE}/sessions`, {})
+      if (response.data.session) {
+        sessionId = response.data.session.id
+        sessions.value.unshift(response.data.session)
+        activeSessionId.value = sessionId
+      }
+    } catch (error) {
+      console.error('创建会话失败:', error)
+      ElMessage.error('创建会话失败，请重试')
+      return
+    }
+  }
+
+  // 检查是否需要更新会话标题（第一条用户消息）
+  const isFirstMessage = messages.value.filter(m => m.role === 'user').length === 0
+
   messages.value.push({
     role: 'user',
     content: query
   })
-  
+
+  // 如果是第一条消息，更新会话标题
+  if (isFirstMessage && sessionId) {
+    const title = query.slice(0, 20) + (query.length > 20 ? '...' : '')
+    await updateSessionTitle(sessionId, title)
+  }
+
   inputQuery.value = ''
   thinking.value = true
   scrollToBottom()
@@ -329,7 +452,8 @@ const sendMessage = async () => {
   try {
     const response = await axios.post(`${API_BASE}/query`, {
       question: query,
-      collection_name: collectionName.value
+      collection_name: collectionName.value,
+      session_id: sessionId
     })
 
     if (response.data.success) {
@@ -340,16 +464,16 @@ const sendMessage = async () => {
         showSources: false // 默认折叠引用
       })
     } else {
-       messages.value.push({
+      messages.value.push({
         role: 'assistant',
         content: '抱歉，我遇到了一些问题：' + response.data.message
       })
     }
   } catch (error) {
-     messages.value.push({
-        role: 'assistant',
-        content: '网络错误或服务不可用，请检查后端服务是否启动。'
-      })
+    messages.value.push({
+      role: 'assistant',
+      content: '网络错误或服务不可用，请检查后端服务是否启动。'
+    })
   } finally {
     thinking.value = false
     scrollToBottom()
@@ -424,14 +548,14 @@ const canCancelTask = (status) => {
 const cancelTask = async (taskId) => {
   const task = taskList.value.find(t => t.taskId === taskId)
   if (!task) return
-  
+
   // 标记为正在取消
   task.cancelling = true
-  
+
   try {
     const response = await axios.post(`${API_BASE}/tasks/${taskId}/cancel`)
     const data = response.data
-    
+
     if (data.success) {
       ElMessage.success(data.message)
       // 更新任务状态
@@ -451,7 +575,159 @@ const cancelTask = async (taskId) => {
   }
 }
 
-// Cleanup on unmount
+// ==================== 会话管理功能 ====================
+
+// 格式化日期
+const formatDate = (dateStr) => {
+  if (!dateStr) return ''
+  const date = new Date(dateStr)
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+
+  if (isToday) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }
+  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+}
+
+// 加载会话列表
+const loadSessions = async () => {
+  loadingSessions.value = true
+  try {
+    const response = await axios.get(`${API_BASE}/sessions`)
+    if (response.data.sessions) {
+      sessions.value = response.data.sessions
+    }
+  } catch (error) {
+    console.error('加载会话列表失败:', error)
+    ElMessage.error('加载会话列表失败')
+  } finally {
+    loadingSessions.value = false
+  }
+}
+
+// 创建新会话
+const createSession = async () => {
+  try {
+    const response = await axios.post(`${API_BASE}/sessions`, { title: '新对话' })
+    if (response.data.session) {
+      const newSession = response.data.session
+      sessions.value.unshift(newSession)
+      activeSessionId.value = newSession.id
+      messages.value = []
+      ElMessage.success('创建新对话成功')
+    }
+  } catch (error) {
+    console.error('创建会话失败:', error)
+    ElMessage.error('创建会话失败')
+  }
+}
+
+// 选择会话
+const selectSession = async (sessionId) => {
+  if (activeSessionId.value === sessionId) return
+
+  loadingSessions.value = true
+  try {
+    const response = await axios.get(`${API_BASE}/sessions/${sessionId}`)
+    if (response.data.session) {
+      activeSessionId.value = sessionId
+
+      // 转换消息格式
+      if (response.data.messages) {
+        messages.value = response.data.messages.map(msg => {
+          let sources = []
+          if (msg.sources) {
+            if (typeof msg.sources === 'string') {
+              try {
+                sources = JSON.parse(msg.sources)
+              } catch (e) {
+                console.warn('解析消息来源失败:', e)
+                sources = []
+              }
+            } else {
+              sources = msg.sources
+            }
+          }
+          return {
+            role: msg.role,
+            content: msg.content,
+            sources: sources,
+            showSources: false
+          }
+        })
+      } else {
+        messages.value = []
+      }
+    }
+  } catch (error) {
+    console.error('加载会话失败:', error)
+    ElMessage.error('加载会话消息失败')
+  } finally {
+    loadingSessions.value = false
+  }
+}
+
+// 删除会话
+const deleteSession = async (sessionId) => {
+  try {
+    await ElMessageBox.confirm('确定要删除这个对话吗？此操作不可恢复。', '确认删除', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    await axios.delete(`${API_BASE}/sessions/${sessionId}`)
+
+    // 从列表中移除
+    const index = sessions.value.findIndex(s => s.id === sessionId)
+    sessions.value.splice(index, 1)
+
+    // 如果删除的是当前活动会话，切换到其他会话或清空
+    if (activeSessionId.value === sessionId) {
+      activeSessionId.value = null
+      messages.value = []
+
+      // 自动选择下一个会话
+      if (sessions.value.length > 0) {
+        await selectSession(sessions.value[0].id)
+      }
+    }
+
+    ElMessage.success('删除成功')
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除会话失败:', error)
+      ElMessage.error('删除会话失败')
+    }
+  }
+}
+
+// 更新会话标题
+const updateSessionTitle = async (sessionId, title) => {
+  try {
+    await axios.put(`${API_BASE}/sessions/${sessionId}`, { title })
+    // 更新本地会话列表中的标题
+    const session = sessions.value.find(s => s.id === sessionId)
+    if (session) {
+      session.title = title
+    }
+  } catch (error) {
+    console.error('更新会话标题失败:', error)
+  }
+}
+
+// 组件挂载时加载会话列表
+onMounted(async () => {
+  await loadSessions()
+
+  // 如果有会话，自动选择最新的一个
+  if (sessions.value.length > 0) {
+    await selectSession(sessions.value[0].id)
+  }
+})
+
+// 清理 on unmount
 onUnmounted(() => {
   Object.keys(pollingTimers).forEach(stopPolling)
 })
@@ -506,6 +782,8 @@ onUnmounted(() => {
   flex: 1;
   padding: 20px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .section-title {
@@ -1009,5 +1287,158 @@ onUnmounted(() => {
 :deep(.task-progress .el-progress__text) {
   color: rgba(255, 255, 255, 0.6) !important;
   font-size: 11px !important;
+}
+
+/* 会话列表样式 */
+.session-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.new-session-btn {
+  color: #409eff;
+  font-size: 13px;
+}
+
+.new-session-btn:hover {
+  color: #66b1ff;
+}
+
+.sessions-list {
+  flex: 1;
+  overflow-y: auto;
+  margin-bottom: 20px;
+  min-height: 100px;
+}
+
+.no-sessions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+  text-align: center;
+}
+
+.no-sessions .el-icon {
+  font-size: 32px;
+  margin-bottom: 10px;
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  border-left: 3px solid transparent;
+}
+
+.session-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.session-item.active {
+  background: rgba(255, 255, 255, 0.1);
+  border-left: 3px solid #409eff;
+}
+
+.session-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-title {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.session-date {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.delete-session-btn {
+  opacity: 0;
+  color: rgba(255, 255, 255, 0.4);
+  padding: 4px !important;
+  transition: all 0.2s ease;
+}
+
+.session-item:hover .delete-session-btn,
+.session-item.active .delete-session-btn {
+  opacity: 1;
+}
+
+.delete-session-btn:hover {
+  color: #f56c6c;
+}
+
+/* 知识库设置区域 */
+.kb-settings-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 15px;
+}
+
+.kb-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  padding: 5px 0;
+  transition: all 0.2s ease;
+}
+
+.kb-settings-header:hover .kb-title {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.kb-title {
+  margin-bottom: 0 !important;
+}
+
+.expand-icon {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.4);
+  transition: transform 0.3s ease;
+}
+
+.expand-icon.expanded {
+  transform: rotate(90deg);
+}
+
+.kb-settings-content {
+  padding-top: 15px;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 欢迎屏幕调整 - 添加当前会话标题显示 */
+:deep(.el-loading-mask) {
+  background-color: rgba(26, 28, 35, 0.8);
 }
 </style>

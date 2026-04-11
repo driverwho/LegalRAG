@@ -71,3 +71,32 @@ class TaskStatusResponse(BaseModel):
     message: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
     result: Optional[Dict[str, Any]] = None
+
+
+class SessionResponse(BaseModel):
+    """Response for session creation or update."""
+
+    success: bool
+    session: Dict[str, Any]
+
+
+class SessionListResponse(BaseModel):
+    """Response for listing sessions."""
+
+    success: bool
+    sessions: List[Dict[str, Any]]
+
+
+class SessionDetailResponse(BaseModel):
+    """Response for session detail with messages."""
+
+    success: bool
+    session: Dict[str, Any]
+    messages: List[Dict[str, Any]]
+
+
+class DeleteResponse(BaseModel):
+    """Response for delete operations."""
+
+    success: bool
+    message: str

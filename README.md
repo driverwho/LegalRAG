@@ -130,11 +130,10 @@ redis-server
 ```
 
 #### 2.5 启动 Celery Worker
-
+目前仅支持单进程。
 ```bash
 cd backend
 celery -A backend.celery_app worker --loglevel=info --pool=solo  
-目前仅支持单进程。。
 ```
 
 #### 2.6 启动 FastAPI 服务
