@@ -131,7 +131,12 @@ def _get_vector_services():
     retry_backoff=True,
 )
 def validate_and_extract(
-    self, file_path: str, collection_name: str, use_ocr: bool = False
+    self,
+    file_path: str,
+    collection_name: str,
+    use_ocr: bool = False,
+    original_filename: Optional[str] = None,
+    cleanup_after: bool = False,
 ) -> Dict[str, Any]:
     """Validate file and extract document content.
 
@@ -139,6 +144,8 @@ def validate_and_extract(
         file_path: Path to the document file.
         collection_name: Target collection name.
         use_ocr: Whether to use OCR for extraction.
+        original_filename: Original filename (preserves CJK characters).
+        cleanup_after: Whether to delete the file after the pipeline finishes.
 
     Returns:
         Dict containing file_path, collection_name, file_hash, documents (serialized), and document_count.
@@ -179,12 +186,22 @@ def validate_and_extract(
             for doc in documents
         ]
 
+        # Overwrite metadata with original filename when available
+        # (temp files use UUID names, losing the original CJK filename)
+        if original_filename:
+            for doc_data in serialized_docs:
+                doc_data["metadata"]["original_filename"] = original_filename
+                doc_data["metadata"]["file_name"] = original_filename
+                doc_data["metadata"]["source"] = original_filename
+
         return {
             "file_path": file_path,
             "collection_name": collection_name,
             "file_hash": file_hash,
             "documents": serialized_docs,
             "document_count": len(documents),
+            "original_filename": original_filename,
+            "cleanup_after": cleanup_after,
         }
 
     except (IOError, OSError) as exc:
@@ -359,10 +376,25 @@ def chunk_and_store(self, preprocess_result: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("Chunking/storage failed: %s", exc)
         update_task_progress(self, TaskStage.FAILED, 85, str(exc))
         raise
+    finally:
+        # Clean up temp file if requested (uploaded files, not server-side paths)
+        if preprocess_result.get("cleanup_after"):
+            file_path = preprocess_result.get("file_path")
+            if file_path:
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logger.info("Cleaned up temp file: %s", file_path)
+                except OSError as e:
+                    logger.warning("Failed to clean up temp file %s: %s", file_path, e)
 
 
 def submit_document_task(
-    file_path: str, collection_name: str, use_ocr: bool = False
+    file_path: str,
+    collection_name: str,
+    use_ocr: bool = False,
+    original_filename: Optional[str] = None,
+    cleanup_after: bool = False,
 ) -> str:
     """Submit a document processing task chain.
 
@@ -370,12 +402,16 @@ def submit_document_task(
         file_path: Path to the document file.
         collection_name: Target collection name.
         use_ocr: Whether to use OCR for extraction.
+        original_filename: Original filename before sanitization (preserves CJK chars).
+        cleanup_after: Whether to delete the file after processing.
 
     Returns:
         The chain's task ID.
     """
     task_chain = chain(
-        validate_and_extract.s(file_path, collection_name, use_ocr),
+        validate_and_extract.s(
+            file_path, collection_name, use_ocr, original_filename, cleanup_after,
+        ),
         preprocess_and_check.s(),
         chunk_and_store.s(),
     )

@@ -2,9 +2,9 @@
 
 import os
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
-from werkzeug.utils import secure_filename
 
 from backend.app.config.settings import get_settings, Settings
 from backend.app.models.requests import DocumentUploadRequest
@@ -39,33 +39,48 @@ async def upload_file(
     use_ocr: bool = Form(default=False),
     settings: Settings = Depends(get_settings),
 ):
-    """Upload a file. Saves to disk and submits async processing task."""
-    # Validate filename
+    """Upload a file. Saves to temp directory and submits async processing task."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected")
 
-    # Save file to temp directory
-    os.makedirs(settings.UPLOAD_FOLDER, exist_ok=True)
-    safe_name = secure_filename(file.filename)
-    if not safe_name or "." not in safe_name:
+    # Preserve the original filename (may contain CJK characters)
+    original_filename = file.filename
+
+    # Extract extension for file type detection
+    _, ext = os.path.splitext(file.filename)
+    if not ext:
         raise HTTPException(
-            status_code=400, detail=f"Invalid filename: '{file.filename}'"
+            status_code=400,
+            detail=f"Invalid filename: '{file.filename}' (missing extension)",
         )
 
-    file_path = os.path.join(settings.UPLOAD_FOLDER, safe_name)
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="File is empty")
 
+    # Save to upload directory with UUID name to avoid collision
+    os.makedirs(settings.UPLOAD_FOLDER, exist_ok=True)
+    temp_name = f"{uuid.uuid4().hex}{ext.lower()}"
+    file_path = os.path.join(settings.UPLOAD_FOLDER, temp_name)
+
     with open(file_path, "wb") as f:
         f.write(content)
 
-    logger.info(f"File saved: {file_path} ({len(content)} bytes)")
+    logger.info(
+        "File saved: %s (%d bytes, original: %s)",
+        file_path, len(content), original_filename,
+    )
 
-    # Submit async task
-    task_id = submit_document_task(file_path, collection_name, use_ocr=use_ocr)
+    # Submit async task with original filename for metadata
+    task_id = submit_document_task(
+        file_path,
+        collection_name,
+        use_ocr=use_ocr,
+        original_filename=original_filename,
+        cleanup_after=True,
+    )
     return TaskSubmitResponse(
         success=True,
-        message=f"File '{safe_name}' uploaded. Processing task submitted.",
+        message=f"File '{original_filename}' uploaded. Processing task submitted.",
         task_id=task_id,
     )

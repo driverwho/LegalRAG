@@ -193,6 +193,22 @@ class DocumentPreprocessor:
 
         raise last_exc  # type: ignore[misc]
 
+    @staticmethod
+    def _extract_from_braces(text: str) -> str:
+        """Extract content enclosed in the outermost pair of curly braces.
+
+        The LLM is instructed to wrap its corrected output in {}.
+        This method strips away any extra commentary outside the braces.
+
+        If no braces are found, the original text is returned as-is
+        (defensive fallback for well-behaved responses).
+        """
+        match = re.search(r"\{(.*)\}", text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        logger.warning("No curly braces found in LLM response — using raw output")
+        return text.strip()
+
     def _llm_process(self, text: str) -> Tuple[str, str]:
         """Process text through the LLM fallback chain.
 
@@ -219,7 +235,8 @@ class DocumentPreprocessor:
             "2. **统一法律引用格式**：将文中对法律法规的引用，统一为《中华人民共和国XXXX法》第X条的格式。\n"
             "3. **补全常见法律简称**：如将《刑法》补全为《中华人民共和国刑法》，但需根据上下文判断，避免错误补全。\n"
             "4. 保持原文段落结构，除上述修改外，不做任何删减或转写。\n"
-            "5.仅回复修改后的原文，不额外补充说明。\n"
+            "5. 仅回复修改后的原文，不额外补充说明。\n"
+            "6. 将修改后的原文放在花括号 {} 内部返回，例如：{修改后的完整原文}。花括号外不要包含任何内容。\n"
         )
 
         messages = [
@@ -239,7 +256,7 @@ class DocumentPreprocessor:
                     )
                 else:
                     logger.debug("LLM processing completed via [%s]", provider.name)
-                return result, provider.name
+                return self._extract_from_braces(result), provider.name
             except Exception as exc:
                 provider_errors.append(f"{provider.name}: {exc}")
                 logger.warning(
