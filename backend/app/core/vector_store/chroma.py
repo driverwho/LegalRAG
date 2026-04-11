@@ -201,3 +201,183 @@ class ChromaVectorStore(BaseVectorStore):
             self._vectorstore = None
         except Exception as exc:
             logger.error("Failed to clear collection: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Knowledge-base management (CRUD on individual documents)
+    # ------------------------------------------------------------------
+
+    def list_collections(self) -> List[Dict[str, Any]]:
+        try:
+            client = self._get_client()
+            result = []
+            for col in client.list_collections():
+                try:
+                    count = client.get_collection(name=col.name).count()
+                except Exception:
+                    count = 0
+                result.append({"name": col.name, "document_count": count})
+            return result
+        except Exception as exc:
+            logger.error("Failed to list collections: %s", exc)
+            return []
+
+    def get_documents(
+        self,
+        collection_name: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 20,
+        keyword: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        target = collection_name or self.collection_name
+        empty = {"documents": [], "total": 0, "offset": offset, "limit": limit}
+
+        try:
+            client = self._get_client()
+            if not self._collection_exists(target):
+                return empty
+
+            collection = client.get_collection(name=target)
+            total = collection.count()
+            if total == 0:
+                return empty
+
+            if keyword:
+                data = collection.get(
+                    where_document={"$contains": keyword},
+                    include=["documents", "metadatas"],
+                )
+                all_ids = data.get("ids", [])
+                all_docs = data.get("documents", [])
+                all_metas = data.get("metadatas", [])
+                filtered_total = len(all_ids)
+
+                page_ids = all_ids[offset : offset + limit]
+                page_docs = all_docs[offset : offset + limit]
+                page_metas = all_metas[offset : offset + limit]
+
+                documents = []
+                for i, doc_id in enumerate(page_ids):
+                    documents.append({
+                        "id": doc_id,
+                        "content": page_docs[i] if page_docs else "",
+                        "metadata": page_metas[i] if page_metas else {},
+                    })
+                return {
+                    "documents": documents,
+                    "total": filtered_total,
+                    "offset": offset,
+                    "limit": limit,
+                }
+
+            data = collection.get(
+                include=["documents", "metadatas"],
+                offset=offset,
+                limit=limit,
+            )
+            ids = data.get("ids", [])
+            docs = data.get("documents", [])
+            metas = data.get("metadatas", [])
+
+            documents = []
+            for i, doc_id in enumerate(ids):
+                documents.append({
+                    "id": doc_id,
+                    "content": docs[i] if docs else "",
+                    "metadata": metas[i] if metas else {},
+                })
+
+            return {
+                "documents": documents,
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+            }
+        except Exception as exc:
+            logger.error("Failed to get documents: %s", exc)
+            return empty
+
+    def get_document(
+        self, doc_id: str, collection_name: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        target = collection_name or self.collection_name
+        try:
+            client = self._get_client()
+            if not self._collection_exists(target):
+                return None
+
+            collection = client.get_collection(name=target)
+            data = collection.get(
+                ids=[doc_id], include=["documents", "metadatas"]
+            )
+
+            if not data["ids"]:
+                return None
+
+            return {
+                "id": data["ids"][0],
+                "content": data["documents"][0] if data["documents"] else "",
+                "metadata": data["metadatas"][0] if data["metadatas"] else {},
+            }
+        except Exception as exc:
+            logger.error("Failed to get document '%s': %s", doc_id, exc)
+            return None
+
+    def delete_documents(
+        self, ids: List[str], collection_name: Optional[str] = None
+    ) -> int:
+        target = collection_name or self.collection_name
+        try:
+            client = self._get_client()
+            if not self._collection_exists(target):
+                return 0
+
+            collection = client.get_collection(name=target)
+            existing = collection.get(ids=ids, include=[])
+            found_ids = existing["ids"]
+            if not found_ids:
+                return 0
+
+            collection.delete(ids=found_ids)
+            logger.info(
+                "Deleted %d documents from '%s'", len(found_ids), target
+            )
+            return len(found_ids)
+        except Exception as exc:
+            logger.error("Failed to delete documents: %s", exc)
+            return 0
+
+    def update_document(
+        self,
+        doc_id: str,
+        content: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        collection_name: Optional[str] = None,
+    ) -> bool:
+        target = collection_name or self.collection_name
+        try:
+            client = self._get_client()
+            if not self._collection_exists(target):
+                return False
+
+            collection = client.get_collection(name=target)
+            existing = collection.get(ids=[doc_id], include=["documents", "metadatas"])
+            if not existing["ids"]:
+                return False
+
+            update_kwargs: Dict[str, Any] = {"ids": [doc_id]}
+            if content is not None:
+                update_kwargs["documents"] = [content]
+            if metadata is not None:
+                update_kwargs["metadatas"] = [metadata]
+
+            # Re-embed if content changed
+            if content is not None:
+                embedding = self.embeddings.embed_documents([content])
+                update_kwargs["embeddings"] = embedding
+
+            collection.update(**update_kwargs)
+            logger.info("Updated document '%s' in '%s'", doc_id, target)
+            return True
+        except Exception as exc:
+            logger.error("Failed to update document '%s': %s", doc_id, exc)
+            return False

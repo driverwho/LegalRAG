@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs git:*)",
+      "Bash(npm install:*)",
+      "Bash(npx vite:*)",
+      "Bash(python -c \"from backend.app.api.v1.knowledge import router; print\\('knowledge router OK'\\)\")",
+      "Bash(python -c \"from backend.app.core.vector_store.chroma import ChromaVectorStore; print\\('chroma OK'\\)\")",
+      "Bash(python -c \"from backend.app.models.requests import DocumentDeleteRequest, DocumentUpdateRequest; print\\('requests OK'\\)\")",
+      "Bash(python -c \"from backend.app.models.responses import CollectionListResponse, DocumentListResponse, DocumentDetailResponse; print\\('responses OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/v1/knowledge.py'\\).read\\(\\)\\); print\\('knowledge.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/vector_store/chroma.py'\\).read\\(\\)\\); print\\('chroma.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/vector_store/base.py'\\).read\\(\\)\\); print\\('base.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/models/requests.py'\\).read\\(\\)\\); print\\('requests.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/models/responses.py'\\).read\\(\\)\\); print\\('responses.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/vector_store/chroma.py', encoding='utf-8'\\).read\\(\\)\\); print\\('chroma.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/vector_store/base.py', encoding='utf-8'\\).read\\(\\)\\); print\\('base.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/models/requests.py', encoding='utf-8'\\).read\\(\\)\\); print\\('requests.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/models/responses.py', encoding='utf-8'\\).read\\(\\)\\); print\\('responses.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/router.py', encoding='utf-8'\\).read\\(\\)\\); print\\('router.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/v1/knowledge.py', encoding='utf-8'\\).read\\(\\)\\); print\\('knowledge.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/deps.py', encoding='utf-8'\\).read\\(\\)\\); print\\('deps.py: OK'\\)\")"
+    ]
+  }
+}

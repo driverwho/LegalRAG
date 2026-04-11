@@ -2,10 +2,7 @@
   <div class="app-layout">
     <!-- 侧边栏 -->
     <aside class="sidebar">
-      <div class="logo-area">
-        <div class="logo-icon">🧠</div>
-        <h1>法律RAG智能助手</h1>
-      </div>
+
 
       <div class="sidebar-content">
         <!-- 会话列表部分 -->
@@ -737,8 +734,8 @@ onUnmounted(() => {
 /* 全局布局 */
 .app-layout {
   display: flex;
-  height: 100vh;
-  width: 100vw;
+  height: 100%;
+  width: 100%;
   background-color: #f0f2f5;
   font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
   overflow: hidden;

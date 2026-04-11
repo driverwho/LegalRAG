@@ -100,3 +100,42 @@ class DeleteResponse(BaseModel):
 
     success: bool
     message: str
+
+
+class CollectionItem(BaseModel):
+    """A single collection summary."""
+
+    name: str
+    document_count: int
+
+
+class CollectionListResponse(BaseModel):
+    """Response for listing all collections."""
+
+    success: bool
+    collections: List[CollectionItem]
+
+
+class DocumentItem(BaseModel):
+    """A single document in a list."""
+
+    id: str
+    content: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DocumentListResponse(BaseModel):
+    """Paginated response for document listing."""
+
+    success: bool
+    documents: List[DocumentItem]
+    total: int
+    offset: int
+    limit: int
+
+
+class DocumentDetailResponse(BaseModel):
+    """Response for a single document detail."""
+
+    success: bool
+    document: DocumentItem

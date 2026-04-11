@@ -1,6 +1,6 @@
 """Pydantic request models for API validation."""
 
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 
@@ -54,3 +54,18 @@ class SessionQueryRequest(BaseModel):
         default=None, description="Session ID to save conversation to"
     )
     k: int = Field(default=5, ge=1, le=50, description="Number of results to retrieve")
+
+
+class DocumentDeleteRequest(BaseModel):
+    """Request body for batch deleting documents by IDs."""
+
+    ids: List[str] = Field(..., min_length=1, description="Document IDs to delete")
+
+
+class DocumentUpdateRequest(BaseModel):
+    """Request body for updating a document's content and/or metadata."""
+
+    content: Optional[str] = Field(default=None, description="New document content")
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None, description="New metadata dict"
+    )

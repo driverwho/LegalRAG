@@ -2,6 +2,8 @@
 
 from functools import lru_cache
 
+import chromadb
+
 from backend.app.config.settings import get_settings
 from backend.app.core.vector_store.chroma import ChromaVectorStore
 from backend.app.core.llm.embedding import EmbeddingManager
@@ -114,3 +116,10 @@ def get_document_checker() -> DocumentChecker:
 def get_session_service() -> SessionService:
     """Create a SessionService for chat history management."""
     return SessionService()
+
+
+@lru_cache()
+def get_chroma_client() -> chromadb.ClientAPI:
+    """Get a lightweight ChromaDB client (no embedding model needed)."""
+    settings = get_settings()
+    return chromadb.PersistentClient(path=settings.CHROMADB_PERSIST_DIR)
