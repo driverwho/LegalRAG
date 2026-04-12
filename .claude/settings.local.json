@@ -19,7 +19,10 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/models/responses.py', encoding='utf-8'\\).read\\(\\)\\); print\\('responses.py: syntax OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/router.py', encoding='utf-8'\\).read\\(\\)\\); print\\('router.py: syntax OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/v1/knowledge.py', encoding='utf-8'\\).read\\(\\)\\); print\\('knowledge.py: OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/deps.py', encoding='utf-8'\\).read\\(\\)\\); print\\('deps.py: OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/deps.py', encoding='utf-8'\\).read\\(\\)\\); print\\('deps.py: OK'\\)\")",
+      "Bash(python -c \"from backend.app.core.document.legal_splitter import LegalParentChildSplitter, cn_to_int; print\\('Import OK'\\); print\\('cn_to_int tests:'\\); print\\(f'  一 = {cn_to_int\\(\\\\\"一\\\\\"\\)}'\\); print\\(f'  十二 = {cn_to_int\\(\\\\\"十二\\\\\"\\)}'\\); print\\(f'  二十三 = {cn_to_int\\(\\\\\"二十三\\\\\"\\)}'\\); print\\(f'  一百零三 = {cn_to_int\\(\\\\\"一百零三\\\\\"\\)}'\\); print\\(f'  42 = {cn_to_int\\(\\\\\"42\\\\\"\\)}'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/document/classifier.py', encoding='utf-8'\\).read\\(\\)\\); print\\('classifier.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/tasks/document_tasks.py', encoding='utf-8'\\).read\\(\\)\\); print\\('document_tasks.py: OK'\\)\")"
     ]
   }
 }

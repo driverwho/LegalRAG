@@ -3,10 +3,10 @@
 import hashlib
 import logging
 import os
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
-from celery import chain
 from langchain_core.documents import Document
 
 from backend.celery_app import celery_app
@@ -123,14 +123,257 @@ def _get_vector_services():
     return splitter, vector_store
 
 
+T = TypeVar("T")
+
+
+def _retry_step(
+    func: Callable[[], T],
+    retry_exceptions: Tuple[type, ...],
+    max_retries: int = 2,
+    retry_delay: float = 2.0,
+) -> T:
+    """Execute *func* with retries on specified exceptions.
+
+    Uses exponential backoff: delay × 2^(attempt-1).
+
+    Args:
+        func: Zero-argument callable to execute.
+        retry_exceptions: Exception types that trigger a retry.
+        max_retries: Maximum number of retry attempts.
+        retry_delay: Base delay in seconds between retries.
+
+    Returns:
+        The return value of *func* on success.
+
+    Raises:
+        The last exception if all retries are exhausted.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(max_retries + 1):
+        try:
+            return func()
+        except retry_exceptions as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = retry_delay * (2 ** attempt)
+                logger.warning(
+                    "Step failed (attempt %d/%d): %s — retrying in %.1fs",
+                    attempt + 1, max_retries + 1, exc, delay,
+                )
+                time.sleep(delay)
+            else:
+                logger.error(
+                    "Step failed after %d attempts: %s", max_retries + 1, exc,
+                )
+    raise last_exc  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Pipeline step functions
+# ---------------------------------------------------------------------------
+# Each step receives the Celery *task* instance so that progress updates
+# are written to the SAME task ID that the frontend is polling.
+# Documents are passed as Python objects (no serialization needed).
+# ---------------------------------------------------------------------------
+
+
+def _step_validate_and_extract(
+    task: Any,
+    file_path: str,
+    use_ocr: bool,
+    original_filename: Optional[str],
+) -> Tuple[List[Document], str]:
+    """Step 1: Validate file and extract document content.
+
+    Returns:
+        ``(documents, file_hash)`` tuple.
+    """
+    from backend.app.core.document.loader import DocumentLoader
+
+    update_task_progress(task, TaskStage.VALIDATING, 10, "Validating file...")
+
+    # Validate file exists
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File does not exist: {file_path}")
+
+    # Validate file extension
+    _, ext = os.path.splitext(file_path)
+    if ext.lower() not in DocumentLoader.SUPPORTED_EXTENSIONS:
+        raise ValueError(f"Unsupported file extension: {ext}")
+
+    # Compute file hash for deduplication
+    file_hash = _compute_file_hash(file_path)
+
+    update_task_progress(task, TaskStage.EXTRACTING, 30, "Extracting text...")
+
+    # Load document
+    loader = DocumentLoader(use_ocr=use_ocr)
+    documents = loader.load_single_file(file_path)
+
+    if not documents:
+        raise ValueError(f"Failed to load document: {file_path}")
+
+    update_task_progress(
+        task, TaskStage.EXTRACTING, 50, f"Extracted {len(documents)} pages"
+    )
+
+    # Overwrite metadata with original filename when available
+    # (temp files use UUID names, losing the original CJK filename)
+    if original_filename:
+        for doc in documents:
+            doc.metadata["original_filename"] = original_filename
+            doc.metadata["file_name"] = original_filename
+            doc.metadata["source"] = original_filename
+
+    return documents, file_hash
+
+
+def _step_preprocess_and_check(
+    task: Any,
+    documents: List[Document],
+) -> Tuple[List[Document], int]:
+    """Step 2: Preprocess documents and run quality check.
+
+    Returns:
+        ``(processed_documents, pending_count)`` tuple.
+    """
+    # Only load preprocessing services (no embedding to save time/memory)
+    _loader, preprocessor, _checker = _get_preprocess_services()
+
+    update_task_progress(
+        task, TaskStage.PREPROCESSING, 55, "Preprocessing documents..."
+    )
+
+    # Run preprocessing
+    processed_documents = preprocessor.preprocess(documents)
+
+    # Check for documents that fell through to "pending" state
+    pending_count = sum(
+        1 for d in processed_documents if d.metadata.get("pending_preprocessing")
+    )
+    if pending_count:
+        update_task_progress(
+            task,
+            TaskStage.PREPROCESSING_DEGRADED,
+            60,
+            f"LLM fallback chain exhausted for {pending_count} document(s) — marked pending",
+        )
+
+    update_task_progress(
+        task, TaskStage.QUALITY_CHECKING, 70, "Running quality check..."
+    )
+
+    # Quality check placeholder (currently disabled)
+    # quality_report = checker.compare_before_after(documents, processed_documents)
+
+    return processed_documents, pending_count
+
+
+def _step_chunk_and_store(
+    task: Any,
+    documents: List[Document],
+    collection_name: str,
+) -> Dict[str, Any]:
+    """Step 3: Classify, split and store documents in vector database.
+
+    Returns:
+        Dict with db_info, chunk_count, doc_type, classification_confidence.
+    """
+    from backend.app.core.document.classifier import DocumentClassifier
+    from backend.app.core.document.legal_splitter import LegalParentChildSplitter
+
+    # Load vector services (includes embedding model) — AFTER preprocessing
+    splitter, vector_store = _get_vector_services()
+
+    # ---- Classify document type ----
+    update_task_progress(
+        task, TaskStage.CHUNKING, 75, "Classifying document type..."
+    )
+
+    classifier = DocumentClassifier()
+    classification = classifier.classify(documents)
+    doc_type = classification.doc_type
+
+    # Stamp doc_type on source documents so it propagates to chunks
+    for doc in documents:
+        doc.metadata["doc_type"] = doc_type
+
+    # ---- Route to appropriate splitter ----
+    if doc_type == "law":
+        update_task_progress(
+            task, TaskStage.CHUNKING, 78,
+            "Splitting legal document (parent-child)...",
+        )
+
+        # Derive law_name from filename metadata (best-effort)
+        law_name = None
+        for doc in documents:
+            fname = (
+                doc.metadata.get("original_filename")
+                or doc.metadata.get("file_name")
+                or ""
+            )
+            if fname:
+                law_name = os.path.splitext(fname)[0]
+                break
+
+        legal_splitter = LegalParentChildSplitter(law_name=law_name)
+        parents, children = legal_splitter.split(documents)
+
+        if children:
+            # Parent-child split succeeded — store both parents and children.
+            # Parents provide context retrieval; children are for vector search.
+            chunks = parents + children
+        else:
+            # No legal structure found — fall back to generic splitter
+            logger.warning(
+                "Legal splitter produced no children — "
+                "falling back to recursive splitter"
+            )
+            chunks = splitter.split(documents)
+    else:
+        update_task_progress(
+            task, TaskStage.CHUNKING, 78, "Splitting case document..."
+        )
+        chunks = splitter.split(documents)
+
+    # Stamp doc_type and processed_at on every chunk
+    processed_at = datetime.now().isoformat()
+    for chunk in chunks:
+        chunk.metadata["doc_type"] = doc_type
+        chunk.metadata["processed_at"] = processed_at
+
+    update_task_progress(
+        task, TaskStage.VECTORIZING, 85, f"Vectorizing {len(chunks)} chunks..."
+    )
+
+    # Add chunks to vector store
+    vector_store.add_documents(chunks, collection_name=collection_name)
+
+    update_task_progress(task, TaskStage.COMPLETED, 100, "Processing complete")
+
+    # Get collection info
+    db_info = vector_store.get_collection_info(collection_name=collection_name)
+
+    return {
+        "db_info": db_info,
+        "chunk_count": len(chunks),
+        "doc_type": doc_type,
+        "classification_confidence": classification.confidence,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Unified Celery task
+# ---------------------------------------------------------------------------
+
+
 @celery_app.task(
     bind=True,
-    name="tasks.validate_and_extract",
-    max_retries=2,
-    autoretry_for=(IOError, OSError),
-    retry_backoff=True,
+    name="tasks.process_document",
+    max_retries=0,       # retries are handled per-step inside the task
 )
-def validate_and_extract(
+def process_document(
     self,
     file_path: str,
     collection_name: str,
@@ -138,255 +381,81 @@ def validate_and_extract(
     original_filename: Optional[str] = None,
     cleanup_after: bool = False,
 ) -> Dict[str, Any]:
-    """Validate file and extract document content.
+    """Unified document processing pipeline.
+
+    Runs **all** processing steps inside a single Celery task so that
+    every ``update_task_progress`` call writes to the **same** task ID.
+    The frontend can therefore observe real-time progress from 0 % → 100 %.
+
+    Pipeline::
+
+        validate → extract → preprocess → quality check
+            → classify → chunk → vectorize → store
+
+    Per-step retry logic:
+
+    - Step 1 (validate / extract): retries on ``IOError``, ``OSError``
+    - Step 2 (preprocess / check): retries on ``ConnectionError``
+    - Step 3 (chunk / store):      retries on ``ConnectionError``
 
     Args:
         file_path: Path to the document file.
-        collection_name: Target collection name.
+        collection_name: Target vector-store collection.
         use_ocr: Whether to use OCR for extraction.
         original_filename: Original filename (preserves CJK characters).
-        cleanup_after: Whether to delete the file after the pipeline finishes.
-
-    Returns:
-        Dict containing file_path, collection_name, file_hash, documents (serialized), and document_count.
+        cleanup_after: Whether to delete the temp file after processing.
     """
     try:
-        from backend.app.core.document.loader import DocumentLoader
-
-        update_task_progress(self, TaskStage.VALIDATING, 10, "Validating file...")
-
-        # Validate file exists
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File does not exist: {file_path}")
-
-        # Validate file extension
-        _, ext = os.path.splitext(file_path)
-        if ext.lower() not in DocumentLoader.SUPPORTED_EXTENSIONS:
-            raise ValueError(f"Unsupported file extension: {ext}")
-
-        # Compute file hash for deduplication
-        file_hash = _compute_file_hash(file_path)
-
-        update_task_progress(self, TaskStage.EXTRACTING, 30, "Extracting text...")
-
-        # Load document
-        loader = DocumentLoader(use_ocr=use_ocr)
-        documents = loader.load_single_file(file_path)
-
-        if not documents:
-            raise ValueError(f"Failed to load document: {file_path}")
-
-        update_task_progress(
-            self, TaskStage.EXTRACTING, 50, f"Extracted {len(documents)} pages"
+        # ---- Step 1: Validate & Extract (retry on I/O errors) ----
+        documents, file_hash = _retry_step(
+            lambda: _step_validate_and_extract(
+                self, file_path, use_ocr, original_filename,
+            ),
+            retry_exceptions=(IOError, OSError),
+            max_retries=2,
         )
 
-        # Serialize documents for passing to next task
-        serialized_docs = [
-            {"page_content": doc.page_content, "metadata": doc.metadata}
-            for doc in documents
-        ]
-
-        # Overwrite metadata with original filename when available
-        # (temp files use UUID names, losing the original CJK filename)
-        if original_filename:
-            for doc_data in serialized_docs:
-                doc_data["metadata"]["original_filename"] = original_filename
-                doc_data["metadata"]["file_name"] = original_filename
-                doc_data["metadata"]["source"] = original_filename
-
-        return {
-            "file_path": file_path,
-            "collection_name": collection_name,
-            "file_hash": file_hash,
-            "documents": serialized_docs,
-            "document_count": len(documents),
-            "original_filename": original_filename,
-            "cleanup_after": cleanup_after,
-        }
-
-    except (IOError, OSError) as exc:
-        logger.error("File I/O error in validate_and_extract: %s", exc)
-        update_task_progress(self, TaskStage.FAILED, 10, str(exc))
-        raise self.retry(exc=exc)
-    except Exception as exc:
-        logger.error("Validation/extraction failed: %s", exc)
-        update_task_progress(self, TaskStage.FAILED, 10, str(exc))
-        raise
-
-
-@celery_app.task(
-    bind=True,
-    name="tasks.preprocess_and_check",
-    max_retries=2,
-    autoretry_for=(ConnectionError,),
-    retry_backoff=True,
-)
-def preprocess_and_check(self, extract_result: Dict[str, Any]) -> Dict[str, Any]:
-    """Preprocess documents and run quality check.
-
-    Args:
-        extract_result: Result from validate_and_extract task.
-
-    Returns:
-        Dict containing all extract_result fields plus quality_report, with processed documents.
-    """
-    try:
-        # Only load preprocessing services (no embedding to save time/memory)
-        loader, preprocessor, checker = _get_preprocess_services()
-
-        # Deserialize documents
-        documents = [
-            Document(page_content=doc["page_content"], metadata=doc["metadata"])
-            for doc in extract_result["documents"]
-        ]
-
-        update_task_progress(
-            self, TaskStage.PREPROCESSING, 55, "Preprocessing documents..."
+        # ---- Step 2: Preprocess & Quality Check (retry on connection errors) ----
+        processed_documents, pending_count = _retry_step(
+            lambda: _step_preprocess_and_check(self, documents),
+            retry_exceptions=(ConnectionError,),
+            max_retries=2,
         )
 
-        # Run preprocessing
-        processed_documents = preprocessor.preprocess(documents)
-
-        # Check for documents that fell through to "pending" state
-        pending_count = sum(
-            1 for d in processed_documents if d.metadata.get("pending_preprocessing")
-        )
-        if pending_count:
-            update_task_progress(
-                self,
-                TaskStage.PREPROCESSING_DEGRADED,
-                60,
-                f"LLM fallback chain exhausted for {pending_count} document(s) — marked pending",
-            )
-
-        update_task_progress(
-            self, TaskStage.QUALITY_CHECKING, 70, "Running quality check..."
+        # ---- Step 3: Classify, Chunk & Store (retry on connection errors) ----
+        result_details = _retry_step(
+            lambda: _step_chunk_and_store(
+                self, processed_documents, collection_name,
+            ),
+            retry_exceptions=(ConnectionError,),
+            max_retries=3,
+            retry_delay=2.0,
         )
 
-        # Run quality check
-        '''quality_report = checker.compare_before_after(documents, processed_documents)
-
-        # Log quality report summary
-        before_errors = quality_report["before"]["total_errors"]
-        after_errors = quality_report["after"]["total_errors"]
-        errors_reduced = quality_report["improvement"]["errors_reduced"]
-        reduction_rate = quality_report["improvement"]["reduction_rate"]
-        logger.info(
-            "Quality comparison: %d errors (before) → %d errors (after), "
-            "reduced %d errors (%.1f%% improvement)",
-            before_errors,
-            after_errors,
-            errors_reduced,
-            reduction_rate,
-        )
-        '''
-        # Serialize processed documents
-        serialized_processed_docs = [
-            {"page_content": doc.page_content, "metadata": doc.metadata}
-            for doc in processed_documents
-        ]
-
-        # Return with processed documents (overwrites original documents)
-        return {
-            **extract_result,
-            "documents": serialized_processed_docs,
-            ''' "quality_report": quality_report, '''
-            "pending_preprocessing_count": pending_count,
-        }
-
-    except ConnectionError as exc:
-        logger.error("Connection error in preprocess_and_check: %s", exc)
-        update_task_progress(self, TaskStage.FAILED, 55, str(exc))
-        raise self.retry(exc=exc)
-    except Exception as exc:
-        logger.error("Preprocessing/quality check failed: %s", exc)
-        update_task_progress(self, TaskStage.FAILED, 55, str(exc))
-        raise
-
-
-@celery_app.task(
-    bind=True,
-    name="tasks.chunk_and_store",
-    max_retries=3,
-    autoretry_for=(ConnectionError,),
-    retry_backoff=True,
-    retry_backoff_max=60,
-)
-def chunk_and_store(self, preprocess_result: Dict[str, Any]) -> Dict[str, Any]:
-    """Split documents into chunks and store in vector database.
-
-    Args:
-        preprocess_result: Result from preprocess_and_check task.
-
-    Returns:
-        Dict with final result including db_info, quality_report, file_hash, and chunk_count.
-    """
-    try:
-        # Load vector services (includes embedding model) - AFTER preprocessing
-        splitter, vector_store = _get_vector_services()
-
-        # Deserialize processed documents
-        documents = [
-            Document(page_content=doc["page_content"], metadata=doc["metadata"])
-            for doc in preprocess_result["documents"]
-        ]
-
-        update_task_progress(self, TaskStage.CHUNKING, 75, "Splitting documents...")
-
-        # Split documents into chunks
-        chunks = splitter.split(documents)
-
-        # Stamp processed_at on each chunk before vectorization
-        processed_at = datetime.now().isoformat()
-        for chunk in chunks:
-            chunk.metadata["processed_at"] = processed_at
-
-        update_task_progress(
-            self, TaskStage.VECTORIZING, 85, f"Vectorizing {len(chunks)} chunks..."
-        )
-
-        # Add chunks to vector store
-        vector_store.add_documents(
-            chunks, collection_name=preprocess_result["collection_name"]
-        )
-
-        update_task_progress(self, TaskStage.COMPLETED, 100, "Processing complete")
-
-        # Get collection info
-        db_info = vector_store.get_collection_info(
-            collection_name=preprocess_result["collection_name"]
-        )
+        result_details["file_hash"] = file_hash
 
         return build_result(
             TaskStage.COMPLETED,
             "Document processed successfully",
-            {
-                "db_info": db_info,
-                "quality_report": preprocess_result.get("quality_report"),
-                "file_hash": preprocess_result.get("file_hash"),
-                "chunk_count": len(chunks),
-            },
+            result_details,
         )
 
-    except ConnectionError as exc:
-        logger.error("Connection error in chunk_and_store: %s", exc)
-        update_task_progress(self, TaskStage.FAILED, 85, str(exc))
-        raise self.retry(exc=exc)
     except Exception as exc:
-        logger.error("Chunking/storage failed: %s", exc)
-        update_task_progress(self, TaskStage.FAILED, 85, str(exc))
+        logger.error("Document processing pipeline failed: %s", exc)
+        update_task_progress(self, TaskStage.FAILED, 0, str(exc))
         raise
+
     finally:
         # Clean up temp file if requested (uploaded files, not server-side paths)
-        if preprocess_result.get("cleanup_after"):
-            file_path = preprocess_result.get("file_path")
-            if file_path:
-                try:
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                        logger.info("Cleaned up temp file: %s", file_path)
-                except OSError as e:
-                    logger.warning("Failed to clean up temp file %s: %s", file_path, e)
+        if cleanup_after and file_path:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info("Cleaned up temp file: %s", file_path)
+            except OSError as e:
+                logger.warning(
+                    "Failed to clean up temp file %s: %s", file_path, e,
+                )
 
 
 def submit_document_task(
@@ -396,25 +465,30 @@ def submit_document_task(
     original_filename: Optional[str] = None,
     cleanup_after: bool = False,
 ) -> str:
-    """Submit a document processing task chain.
+    """Submit a document processing task.
+
+    Unlike the previous ``chain()``-based approach, this now submits a
+    **single** Celery task.  The returned task ID is the same ID used for
+    all progress updates, so the frontend can poll it and observe the
+    full 0 %–100 % lifecycle.
 
     Args:
         file_path: Path to the document file.
         collection_name: Target collection name.
         use_ocr: Whether to use OCR for extraction.
-        original_filename: Original filename before sanitization (preserves CJK chars).
+        original_filename: Original filename before sanitization.
         cleanup_after: Whether to delete the file after processing.
 
     Returns:
-        The chain's task ID.
+        The task ID (usable for ``GET /tasks/{task_id}``).
     """
-    task_chain = chain(
-        validate_and_extract.s(
-            file_path, collection_name, use_ocr, original_filename, cleanup_after,
-        ),
-        preprocess_and_check.s(),
-        chunk_and_store.s(),
+    result = process_document.apply_async(
+        args=[file_path, collection_name],
+        kwargs={
+            "use_ocr": use_ocr,
+            "original_filename": original_filename,
+            "cleanup_after": cleanup_after,
+        },
     )
-    result = task_chain.apply_async()
-    logger.info("Submitted document task chain: %s", result.id)
+    logger.info("Submitted document processing task: %s", result.id)
     return result.id
