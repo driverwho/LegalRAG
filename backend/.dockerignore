@@ -1,0 +1,52 @@
+# ============================================================
+# Backend .dockerignore
+# ============================================================
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker (prevent recursive copy)
+Dockerfile
+.dockerignore
+
+# Data directories (mounted as volumes, not baked into image)
+chroma_db/
+data/
+temp/
+vector_uploads/
+logs/
+
+# Test files
+test/
+tests/
+*.test.py
+
+# Documentation
+DOC/
+*.md
+
+# Debug output
+debug_output/
+
+# Environment files (injected at runtime, not build time)
+.env
+.env.*
+!.env.example

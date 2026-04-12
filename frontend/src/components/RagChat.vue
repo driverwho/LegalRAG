@@ -265,7 +265,8 @@ import axios from 'axios'
 import MarkdownIt from 'markdown-it'
 
 const md = new MarkdownIt({ html: true, breaks: true, linkify: true })
-const API_BASE = 'http://localhost:5000/api/vector'
+// Use relative path so it works in both dev (via Vite proxy) and production (via Nginx proxy)
+const API_BASE = '/api/vector'
 
 // State
 const collectionName = ref('agent_rag')

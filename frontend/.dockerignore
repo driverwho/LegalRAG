@@ -1,0 +1,30 @@
+# ============================================================
+# Frontend .dockerignore
+# ============================================================
+
+# Dependencies (reinstalled during build)
+node_modules/
+
+# Build output (rebuilt during build)
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,128 @@
+# ============================================================
+# RAG Application - Docker Compose
+# ============================================================
+# Usage:
+#   Start all services:   docker compose up -d --build
+#   View logs:            docker compose logs -f
+#   Stop all:             docker compose down
+#   Stop + remove data:   docker compose down -v
+# ============================================================
+
+services:
+
+  # ---- Frontend (Nginx + Vue SPA) ----
+  frontend:
+    build: ./frontend
+    container_name: rag-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ---- Backend API (FastAPI + Gunicorn) ----
+  backend:
+    build: ./backend
+    container_name: rag-backend
+    env_file: ./backend/.env.production
+    environment:
+      # Override critical settings for production
+      - DEBUG=False
+      - APP_HOST=0.0.0.0
+      - APP_PORT=5000
+      - SQLITE_DB_PATH=/app/data/chat_history.db
+      - CHROMADB_PERSIST_DIR=/app/chroma_db
+      - UPLOAD_FOLDER=/app/temp/vector_uploads
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - chroma_data:/app/chroma_db
+      - sqlite_data:/app/data
+      - upload_data:/app/temp/vector_uploads
+      - logs_data:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - rag-network
+    # Health check is defined in Dockerfile, but can be overridden here
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  # ---- Celery Worker (async document processing) ----
+  celery-worker:
+    build: ./backend
+    container_name: rag-celery-worker
+    env_file: ./backend/.env.production
+    environment:
+      - SQLITE_DB_PATH=/app/data/chat_history.db
+      - CHROMADB_PERSIST_DIR=/app/chroma_db
+      - UPLOAD_FOLDER=/app/temp/vector_uploads
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    # Override CMD: run Celery worker instead of Gunicorn
+    command: >
+      celery -A backend.celery_app:celery_app worker
+      --loglevel=info
+      --concurrency=1
+    volumes:
+      - chroma_data:/app/chroma_db
+      - sqlite_data:/app/data
+      - upload_data:/app/temp/vector_uploads
+      - logs_data:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - rag-network
+    # 覆盖 Dockerfile 里针对 HTTP 的健康检查
+    # celery worker 没有 HTTP 服务，改用 celery ping 探测
+    healthcheck:
+      test: ["CMD", "celery", "-A", "backend.celery_app:celery_app", "inspect", "ping", "--destination", "celery@$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # ---- Redis (Celery message broker) ----
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# ---- Named Volumes (data persists across container restarts) ----
+volumes:
+  chroma_data:
+    driver: local
+  sqlite_data:
+    driver: local
+  upload_data:
+    driver: local
+  redis_data:
+    driver: local
+  logs_data:
+    driver: local
+
+# ---- Network ----
+networks:
+  rag-network:
+    driver: bridge
