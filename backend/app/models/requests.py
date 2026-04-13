@@ -15,7 +15,9 @@ class QueryRequest(BaseModel):
     """Request body for RAG question answering."""
 
     question: str
-    collection_name: str
+    collection_name: Optional[str] = Field(
+        default=None, description="Target collection; None = search all collections"
+    )
     k: int = Field(default=5, ge=1, le=50, description="Number of results to retrieve")
 
 
@@ -23,7 +25,9 @@ class SearchRequest(BaseModel):
     """Request body for similarity search."""
 
     query: str
-    collection_name: str
+    collection_name: Optional[str] = Field(
+        default=None, description="Target collection; None = search all collections"
+    )
     k: int = Field(default=5, ge=1, le=50, description="Number of results to return")
 
 
@@ -49,7 +53,9 @@ class SessionQueryRequest(BaseModel):
     """Request body for RAG query within a session."""
 
     question: str
-    collection_name: str
+    collection_name: Optional[str] = Field(
+        default=None, description="Target collection; None = search all collections"
+    )
     session_id: Optional[str] = Field(
         default=None, description="Session ID to save conversation to"
     )

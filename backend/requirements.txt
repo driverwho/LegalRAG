@@ -1,0 +1,61 @@
+# ============================================================
+# RAG Backend - Python Dependencies
+# ============================================================
+
+# ---------- Web Framework ----------
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+gunicorn>=22.0.0                # Production ASGI server (with uvicorn workers)
+python-multipart>=0.0.9         # FastAPI file upload support
+
+# ---------- Configuration ----------
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-dotenv>=1.0.0
+
+# ---------- Database (SQLite / SQLAlchemy) ----------
+sqlalchemy>=2.0.0
+
+# ---------- Task Queue ----------
+celery>=5.4.0
+redis>=5.0.0
+
+# ---------- Vector Store ----------
+chromadb>=0.5.0
+langchain-chroma>=0.1.0
+
+# ---------- LangChain Core ----------
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-community>=0.2.0
+langchain-text-splitters>=0.2.0
+langchain-huggingface>=0.0.3
+
+# ---------- LLM Client ----------
+openai>=1.30.0                  # DashScope/Moonshot (OpenAI-compatible)
+dashscope>=1.20.0               # DashScope Embedding
+sentence-transformers>=2.2.0    # HuggingFace fallback embedding
+
+# ---------- Document Processing ----------
+numpy>=1.24.0
+tqdm>=4.66.0
+pillow>=10.0.0                  # Image processing
+opencv-python-headless>=4.8.0   # PDF image extraction (headless for server, no GUI)
+unstructured>=0.14.0            # UnstructuredFileLoader
+python-docx>=0.8.11             # DOCX loading
+pymupdf>=1.23.0                 # PDF loading
+pypdf>=3.0.0
+docx2txt>=0.8
+openpyxl>=3.1.0
+markdown>=3.5.0
+
+# ---------- OCR (PaddleOCR) ----------
+paddlepaddle>=3.0.0             # PaddlePaddle CPU version
+paddleocr>=3.0.0                # PaddleOCR
+
+# ---------- NLP ----------
+nltk>=3.8.0
+
+# ---------- Utilities ----------
+werkzeug>=3.0.0
+httptools>=0.6.0                # Fast HTTP parsing for uvicorn

@@ -164,6 +164,61 @@ class ChromaVectorStore(BaseVectorStore):
             logger.error("Search failed: %s", exc)
             return []
 
+    def search_all_collections(
+        self,
+        query: str,
+        k: int = 5,
+        filter_dict: Optional[Dict] = None,
+    ) -> List[Tuple[Document, float]]:
+        """Search across every existing collection and return the global top-k results.
+
+        Each collection is queried for up to k candidates; all candidates are merged,
+        sorted by score (descending = more similar), and the best k are returned.
+        """
+        try:
+            client = self._get_client()
+            collection_names = [c.name for c in client.list_collections()]
+        except Exception as exc:
+            logger.error("Failed to list collections for all-collection search: %s", exc)
+            return []
+
+        if not collection_names:
+            logger.warning("No collections found in the vector store")
+            return []
+
+        all_results: List[Tuple[Document, float]] = []
+        for name in collection_names:
+            vs = self._load_vectorstore(name)
+            if vs is None:
+                continue
+            try:
+                if filter_dict:
+                    results = vs.similarity_search_with_score(
+                        query=query, k=k, filter=filter_dict
+                    )
+                else:
+                    results = vs.similarity_search_with_score(query=query, k=k)
+                # Tag each document with its source collection
+                for doc, _ in results:
+                    doc.metadata.setdefault("collection", name)
+                all_results.extend(results)
+                logger.debug(
+                    "Collection '%s': %d candidates for query '%s'",
+                    name, len(results), query[:50],
+                )
+            except Exception as exc:
+                logger.error("Search in collection '%s' failed: %s", name, exc)
+
+        # Sort by score descending (higher score = more similar) and keep top-k
+        all_results.sort(key=lambda x: x[1], reverse=True)
+        top_k = all_results[:k]
+
+        logger.info(
+            "All-collection search '%s': %d collections, %d total candidates → top %d",
+            query[:50], len(collection_names), len(all_results), len(top_k),
+        )
+        return top_k
+
     def get_collection_info(
         self, collection_name: Optional[str] = None
     ) -> Dict[str, Any]:

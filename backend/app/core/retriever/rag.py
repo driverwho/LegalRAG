@@ -4,8 +4,6 @@ import logging
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 
-from langchain_core.documents import Document
-
 from backend.app.core.vector_store.base import BaseVectorStore
 from backend.app.core.llm.chat import ChatManager
 
@@ -67,17 +65,16 @@ class RAGPipeline:
     ) -> List[RetrievalResult]:
         """Search for similar content, filtering by similarity threshold.
 
-        Args:
-            query: Search query text.
-            k: Maximum number of results.
-            collection_name: Target collection.
-
-        Returns:
-            Filtered list of RetrievalResult objects.
+        When collection_name is None, searches across ALL collections and
+        returns the globally best results. Pass an explicit name to restrict
+        the search to a single collection.
         """
-        raw_results = self.vector_store.search(
-            query=query, k=k, collection_name=collection_name
-        )
+        if collection_name is None:
+            raw_results = self.vector_store.search_all_collections(query=query, k=k)
+        else:
+            raw_results = self.vector_store.search(
+                query=query, k=k, collection_name=collection_name
+            )
 
         results = []
         for doc, score in raw_results:
@@ -92,10 +89,11 @@ class RAGPipeline:
                 )
 
         logger.info(
-            "Search for '%s' returned %d results (threshold=%.2f)",
+            "Search for '%s' returned %d results (threshold=%.2f, collection=%s)",
             query[:50],
             len(results),
             self.similarity_threshold,
+            collection_name or "ALL",
         )
         return results
 

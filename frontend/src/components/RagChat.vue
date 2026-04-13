@@ -78,19 +78,6 @@
               </el-upload>
             </div>
 
-            <div class="form-group">
-              <label>集合名称</label>
-              <el-input 
-                v-model="collectionName" 
-                placeholder="例如: agent_rag" 
-                class="custom-input"
-              >
-                <template #prefix>
-                  <el-icon><Collection /></el-icon>
-                </template>
-              </el-input>
-            </div>
-
             <el-button 
               type="primary" 
               class="action-btn upload-btn" 
@@ -136,7 +123,7 @@
       </div>
 
       <div class="sidebar-footer">
-        <p>© 2024 MCP Agent System</p>
+        <p>© 2026 Legal RAG System</p>
       </div>
     </aside>
 
@@ -146,10 +133,6 @@
       <header class="chat-header">
         <div class="header-info">
           <h2>智能问答</h2>
-          <span class="status-badge">
-            <span class="status-dot"></span>
-            当前集合: {{ collectionName }}
-          </span>
         </div>
         <div class="header-actions">
           <el-button circle icon="Delete" @click="clearHistory" title="清空对话" />
@@ -157,7 +140,7 @@
       </header>
 
       <!-- 消息列表 -->
-      <div class="messages-container" ref="messagesRef">
+      <div class="messages-container" ref="messagesRef" @scroll="onMessagesScroll" @wheel="onMessagesWheel">
         <div v-if="messages.length === 0" class="welcome-screen">
           <div class="welcome-icon">👋</div>
           <h3>你好！我是你的法律知识助手</h3>
@@ -188,7 +171,16 @@
               <el-avatar :size="40" :icon="msg.role === 'user' ? User : Service" :class="msg.role" />
             </div>
             <div class="message-content">
-              <div class="bubble" v-html="renderMarkdown(msg.content)"></div>
+              <!-- 进度状态：正在流式接收但内容尚未到达 -->
+              <div v-if="msg.streaming && !msg.content" class="bubble status-bubble">
+                <el-icon class="spinning-icon"><Loading /></el-icon>
+                <span class="status-text">{{ msg.progressText || '处理中...' }}</span>
+              </div>
+              <!-- 正常内容气泡 -->
+              <template v-else>
+                <div class="bubble" v-html="renderMarkdown(msg.content)"></div>
+                <span v-if="msg.streaming" class="stream-cursor" aria-hidden="true"></span>
+              </template>
               
               <!-- 引用来源卡片 -->
               <div v-if="msg.sources && msg.sources.length > 0" class="sources-card">
@@ -216,12 +208,25 @@
             <el-avatar :size="40" :icon="Service" class="assistant" />
           </div>
           <div class="message-content">
-            <div class="bubble thinking-bubble">
-              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <div class="bubble status-bubble">
+              <el-icon class="spinning-icon"><Loading /></el-icon>
+              <span class="status-text">连接中...</span>
             </div>
           </div>
         </div>
       </div>
+
+      <!-- 滚到底部按钮 -->
+      <transition name="scroll-btn-fade">
+        <button
+          v-if="userScrolledUp && (streaming || thinking)"
+          class="scroll-to-bottom-btn"
+          @click="jumpToBottom"
+          title="跳到底部"
+        >
+          <el-icon><ArrowDown /></el-icon>
+        </button>
+      </transition>
 
       <!-- 输入区域 -->
       <div class="input-wrapper">
@@ -235,11 +240,11 @@
             class="chat-input"
             @keydown.enter.prevent="sendMessage"
           />
-          <el-button 
-            type="primary" 
-            circle 
+          <el-button
+            type="primary"
+            circle
             class="send-btn"
-            :disabled="!inputQuery.trim() || thinking"
+            :disabled="!inputQuery.trim() || thinking || streaming"
             @click="sendMessage"
           >
             <el-icon><Position /></el-icon>
@@ -255,9 +260,9 @@
 
 <script setup>
 import { ref, nextTick, onMounted, onUnmounted } from 'vue'
-import { 
-  UploadFilled, User, Service, Position, Collection, 
-  CircleCheckFilled, Delete, Document, Search, ChatLineRound,
+import {
+  UploadFilled, User, Service, Position, Loading,
+  Delete, Document, Search, ChatLineRound,
   CollectionTag, ArrowDown, Plus, ArrowRight
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -269,7 +274,7 @@ const md = new MarkdownIt({ html: true, breaks: true, linkify: true })
 const API_BASE = '/api/vector'
 
 // State
-const collectionName = ref('agent_rag')
+const COLLECTION_NAME = 'agent_rag'
 const uploadRef = ref(null)
 const filesToUpload = ref([])
 const uploading = ref(false)
@@ -280,7 +285,8 @@ let pollingTimers = {}
 
 const inputQuery = ref('')
 const messages = ref([])
-const thinking = ref(false)
+const thinking = ref(false)      // 等待首个 token（显示三点动画）
+const streaming = ref(false)     // 正在流式输出中
 const messagesRef = ref(null)
 
 // Session management state
@@ -288,6 +294,10 @@ const sessions = ref([])
 const activeSessionId = ref(null)
 const loadingSessions = ref(false)
 const kbSettingsExpanded = ref(false)  // 知识库设置展开/折叠
+const userScrolledUp = ref(false)      // 用户是否主动向上滚动
+
+// Session message cache: { sessionId: messages[] }
+const sessionCache = ref(new Map())
 
 // Markdown 渲染
 const renderMarkdown = (text) => {
@@ -321,6 +331,9 @@ const clearHistory = async () => {
       // 删除旧会话
       await axios.delete(`${API_BASE}/sessions/${oldSessionId}`)
 
+      // 从缓存中移除
+      sessionCache.value.delete(oldSessionId)
+
       // 从列表中移除
       const index = sessions.value.findIndex(s => s.id === oldSessionId)
       sessions.value.splice(index, 1)
@@ -345,7 +358,7 @@ const clearHistory = async () => {
 }
 
 // File Upload Logic
-const handleFileChange = (file, fileList) => {
+const handleFileChange = (_file, fileList) => {
   filesToUpload.value = fileList.map(f => f.raw)
 }
 
@@ -365,7 +378,7 @@ const submitUpload = async () => {
     try {
       const formData = new FormData()
       formData.append('file', file)
-      formData.append('collection_name', collectionName.value)
+      formData.append('collection_name', COLLECTION_NAME)
 
       const response = await axios.post(`${API_BASE}/upload_file`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
@@ -410,7 +423,7 @@ const submitUpload = async () => {
 // Chat Logic
 const sendMessage = async () => {
   const query = inputQuery.value.trim()
-  if (!query || thinking.value) return
+  if (!query || thinking.value || streaming.value) return
 
   // 如果没有活动会话，先创建一个
   let sessionId = activeSessionId.value
@@ -429,6 +442,10 @@ const sendMessage = async () => {
     }
   }
 
+  // 锁定当前会话ID，防止流式传输时切换会话导致消息错乱
+  const lockedSessionId = sessionId
+  const lockedMessages = messages.value
+
   // 检查是否需要更新会话标题（第一条用户消息）
   const isFirstMessage = messages.value.filter(m => m.role === 'user').length === 0
 
@@ -437,6 +454,11 @@ const sendMessage = async () => {
     content: query
   })
 
+  // 立即更新缓存
+  if (sessionId) {
+    sessionCache.value.set(sessionId, [...messages.value])
+  }
+
   // 如果是第一条消息，更新会话标题
   if (isFirstMessage && sessionId) {
     const title = query.slice(0, 20) + (query.length > 20 ? '...' : '')
@@ -444,46 +466,158 @@ const sendMessage = async () => {
   }
 
   inputQuery.value = ''
-  thinking.value = true
-  scrollToBottom()
+  thinking.value = true   // 显示三点等待动画（等待 HTTP 连接建立）
+  scrollToBottom(true)    // 发送时强制到底部，重置滚动状态
+
+  // assistantMsgIndex 在连接成功后再确定
+  let assistantMsgIndex = -1
 
   try {
-    const response = await axios.post(`${API_BASE}/query`, {
-      question: query,
-      collection_name: collectionName.value,
-      session_id: sessionId
+    const res = await fetch(`${API_BASE}/query/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question: query,
+        session_id: lockedSessionId
+      })
     })
 
-    if (response.data.success) {
-      messages.value.push({
-        role: 'assistant',
-        content: response.data.answer,
-        sources: response.data.sources,
-        showSources: false // 默认折叠引用
-      })
-    } else {
-      messages.value.push({
-        role: 'assistant',
-        content: '抱歉，我遇到了一些问题：' + response.data.message
-      })
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+
+    // HTTP 连接已建立，现在才插入 assistant 气泡并关闭三点动画
+    // 这样两者不会同时出现
+    thinking.value = false
+    streaming.value = true
+    assistantMsgIndex = lockedMessages.length
+    lockedMessages.push({
+      role: 'assistant',
+      content: '',
+      sources: [],
+      showSources: false,
+      streaming: true,
+      progressText: ''   // 由 progress 事件实时更新
+    })
+
+    // 只有当前仍在该会话时才滚动
+    if (activeSessionId.value === lockedSessionId) {
+      scrollToBottom()
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+
+      // SSE 每条消息以 "\n\n" 结尾
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop()   // 最后一段可能不完整，留给下次
+
+      for (const part of parts) {
+        const line = part.trim()
+        if (!line.startsWith('data: ')) continue
+
+        const jsonStr = line.slice('data: '.length)
+        let event
+        try {
+          event = JSON.parse(jsonStr)
+        } catch (e) {
+          continue
+        }
+
+        if (event.type === 'progress') {
+          lockedMessages[assistantMsgIndex].progressText = event.text
+        } else if (event.type === 'sources') {
+          lockedMessages[assistantMsgIndex].sources = event.sources
+        } else if (event.type === 'chunk') {
+          lockedMessages[assistantMsgIndex].content += event.text
+          // 更新缓存中的消息（使用锁定的会话ID）
+          sessionCache.value.set(lockedSessionId, [...lockedMessages])
+          // 只有当前仍在该会话时才滚动
+          if (activeSessionId.value === lockedSessionId) {
+            scrollToBottom()
+          }
+        } else if (event.type === 'done') {
+          lockedMessages[assistantMsgIndex].streaming = false
+          // 最终更新缓存
+          sessionCache.value.set(lockedSessionId, [...lockedMessages])
+        } else if (event.type === 'error') {
+          lockedMessages[assistantMsgIndex].content = '抱歉，生成回答时出现错误：' + event.message
+          lockedMessages[assistantMsgIndex].streaming = false
+        }
+      }
     }
   } catch (error) {
-    messages.value.push({
-      role: 'assistant',
-      content: '网络错误或服务不可用，请检查后端服务是否启动。'
-    })
+    console.error('流式请求失败:', error)
+    thinking.value = false
+    if (assistantMsgIndex >= 0) {
+      // 连接建立后才出错：更新已有气泡
+      lockedMessages[assistantMsgIndex].content = '网络错误或服务不可用，请检查后端服务是否启动。'
+      lockedMessages[assistantMsgIndex].streaming = false
+    } else {
+      // 连接未建立（fetch 本身失败）：新增错误气泡
+      lockedMessages.push({
+        role: 'assistant',
+        content: '网络错误或服务不可用，请检查后端服务是否启动。',
+        sources: [],
+        showSources: false,
+        streaming: false
+      })
+    }
+    // 更新缓存
+    sessionCache.value.set(lockedSessionId, [...lockedMessages])
   } finally {
     thinking.value = false
-    scrollToBottom()
+    streaming.value = false
+    // 只有当前仍在该会话时才滚动
+    if (activeSessionId.value === lockedSessionId) {
+      scrollToBottom()
+    }
   }
 }
 
-const scrollToBottom = () => {
+const scrollToBottom = (force = false) => {
   nextTick(() => {
-    if (messagesRef.value) {
+    if (!messagesRef.value) return
+    if (force || (!userScrolledUp.value && isAtBottom.value)) {
       messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+      if (force) {
+        isAtBottom.value = true
+        userScrolledUp.value = false
+      }
     }
   })
+}
+
+// 用户手动滚动：检测是否回到底部（50px 容差）
+const isAtBottom = ref(true)
+const onMessagesScroll = () => {
+  const el = messagesRef.value
+  if (!el) return
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
+  isAtBottom.value = atBottom
+  if (atBottom) {
+    userScrolledUp.value = false  // 用户滚回底部，恢复自动跟随
+  }
+}
+
+// wheel 向上 → 标记用户主动上划，暂停自动滚动
+const onMessagesWheel = (e) => {
+  if (e.deltaY < 0) {
+    userScrolledUp.value = true
+  }
+}
+
+// "跳到底部"按钮：强制回到底部并恢复自动跟随
+const jumpToBottom = () => {
+  userScrolledUp.value = false
+  scrollToBottom(true)
 }
 
 // Task polling logic
@@ -625,6 +759,19 @@ const createSession = async () => {
 const selectSession = async (sessionId) => {
   if (activeSessionId.value === sessionId) return
 
+  // 先保存当前会话的消息到缓存
+  if (activeSessionId.value && messages.value.length > 0) {
+    sessionCache.value.set(activeSessionId.value, [...messages.value])
+  }
+
+  // 检查缓存中是否有该会话的消息
+  if (sessionCache.value.has(sessionId)) {
+    activeSessionId.value = sessionId
+    messages.value = sessionCache.value.get(sessionId)
+    return
+  }
+
+  // 缓存未命中，从后端加载
   loadingSessions.value = true
   try {
     const response = await axios.get(`${API_BASE}/sessions/${sessionId}`)
@@ -654,6 +801,8 @@ const selectSession = async (sessionId) => {
             showSources: false
           }
         })
+        // 加载后立即缓存
+        sessionCache.value.set(sessionId, [...messages.value])
       } else {
         messages.value = []
       }
@@ -676,6 +825,9 @@ const deleteSession = async (sessionId) => {
     })
 
     await axios.delete(`${API_BASE}/sessions/${sessionId}`)
+
+    // 从缓存中移除
+    sessionCache.value.delete(sessionId)
 
     // 从列表中移除
     const index = sessions.value.findIndex(s => s.id === sessionId)
@@ -898,34 +1050,15 @@ onUnmounted(() => {
 }
 
 .header-info h2 {
-  margin: 0 0 5px 0;
+  margin: 0;
   font-size: 18px;
   color: #303133;
-}
-
-.status-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #909399;
-  background: #f4f4f5;
-  padding: 2px 8px;
-  border-radius: 12px;
-}
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  background: #67c23a;
-  border-radius: 50%;
 }
 
 .messages-container {
   flex: 1;
   padding: 30px;
   overflow-y: auto;
-  scroll-behavior: smooth;
 }
 
 /* 欢迎屏幕 */
@@ -1150,28 +1283,46 @@ onUnmounted(() => {
   color: #909399;
 }
 
-/* 思考动画 */
-.thinking-bubble {
-  padding: 10px 15px !important;
-}
-
-.thinking .dot {
+/* 流式输出光标 */
+.stream-cursor {
   display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: #909399;
-  margin: 0 3px;
-  animation: jump 1.4s infinite ease-in-out;
+  width: 2px;
+  height: 1em;
+  background-color: #409eff;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 0.8s step-start infinite;
 }
 
-.thinking .dot:nth-child(1) { animation-delay: 0s; }
-.thinking .dot:nth-child(2) { animation-delay: 0.2s; }
-.thinking .dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
 
-@keyframes jump {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
+/* 状态气泡（连接中 / 检索中 / 生成中） */
+.status-bubble {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px !important;
+  min-width: 180px;
+}
+
+.spinning-icon {
+  font-size: 18px;
+  color: #409eff;
+  flex-shrink: 0;
+  animation: spin 1s linear infinite;
+}
+
+.status-text {
+  font-size: 14px;
+  color: #909399;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 /* 消息过渡动画 */
@@ -1435,8 +1586,45 @@ onUnmounted(() => {
   }
 }
 
-/* 欢迎屏幕调整 - 添加当前会话标题显示 */
+/* 欢迎屏幕调整 */
 :deep(.el-loading-mask) {
   background-color: rgba(26, 28, 35, 0.8);
+}
+
+/* 跳到底部按钮 */
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 130px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: #409eff;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.4);
+  z-index: 10;
+  transition: background 0.2s, transform 0.2s;
+}
+
+.scroll-to-bottom-btn:hover {
+  background: #66b1ff;
+  transform: translateX(-50%) scale(1.08);
+}
+
+.scroll-btn-fade-enter-active,
+.scroll-btn-fade-leave-active {
+  transition: opacity 0.25s, transform 0.25s;
+}
+
+.scroll-btn-fade-enter-from,
+.scroll-btn-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(8px);
 }
 </style>

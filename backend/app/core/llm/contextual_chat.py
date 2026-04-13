@@ -1,7 +1,7 @@
 """Extended ChatManager with context management support."""
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Iterator
 
 from openai import OpenAI
 
@@ -147,3 +147,85 @@ class ContextualChatManager:
                 ),
             },
         ]
+
+    # ------------------------------------------------------------------
+    # Streaming variants
+    # ------------------------------------------------------------------
+
+    def generate_rag_response_stream(
+        self,
+        question: str,
+        contexts: List[Dict[str, Any]],
+        session_id: Optional[str] = None,
+    ) -> Iterator[str]:
+        """Streaming version of generate_rag_response.
+
+        Yields text chunks as they arrive from the LLM.
+        """
+        if not contexts:
+            yield from self._generate_fallback_stream(question, session_id)
+        else:
+            yield from self._generate_with_context_stream(question, contexts, session_id)
+
+    def _generate_with_context_stream(
+        self,
+        question: str,
+        contexts: List[Dict[str, Any]],
+        session_id: Optional[str] = None,
+    ) -> Iterator[str]:
+        """Stream answer with retrieval + conversation context."""
+        if self.context_manager and session_id:
+            built = self.context_manager.build_context(
+                session_id=session_id,
+                current_question=question,
+                retrieval_contexts=contexts,
+            )
+            messages = built.to_llm_messages()
+        else:
+            messages = self._build_basic_messages(question, contexts)
+
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model, messages=messages, stream=True
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    yield delta.content
+        except Exception as exc:
+            logger.error("LLM streaming generation failed: %s", exc)
+            raise LLMError(f"Streaming generation failed: {exc}") from exc
+
+    def _generate_fallback_stream(
+        self, question: str, session_id: Optional[str] = None
+    ) -> Iterator[str]:
+        """Stream answer using general knowledge when no contexts found."""
+        logger.info("No contexts available — using general knowledge fallback (stream)")
+
+        messages: List[Dict[str, str]] = [
+            {
+                "role": "system",
+                "content": (
+                    "你是一个智能助手。用户的问题在知识库中未找到相关信息，"
+                    "请利用你的通用知识尝试回答，并友好地告知用户该信息可能不包含在上传的文档中。"
+                ),
+            },
+        ]
+
+        if self.context_manager and session_id:
+            history = self.context_manager._load_history(session_id)
+            messages.extend(history)
+
+        messages.append({"role": "user", "content": question})
+
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model, messages=messages, stream=True
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    yield delta.content
+        except Exception as exc:
+            logger.error("Fallback streaming generation failed: %s", exc)
+            raise LLMError(f"Fallback streaming generation failed: {exc}") from exc
