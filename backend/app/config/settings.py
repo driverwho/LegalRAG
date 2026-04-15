@@ -188,9 +188,19 @@ class Settings(BaseSettings):
 
     # Retrieval
     SIMILARITY_THRESHOLD: float = Field(
-        default=0.5, description="Minimum similarity score"
+        default=0.5, description="Maximum ChromaDB distance to keep (lower = stricter)"
     )
     MAX_RESULTS: int = Field(default=10, description="Maximum search results")
+    VECTOR_WEIGHT: float = Field(
+        default=1.0,
+        description="RRF weight for vector (semantic) retriever. "
+                    "Increase to favour semantic similarity over keyword match.",
+    )
+    BM25_WEIGHT: float = Field(
+        default=1.0,
+        description="RRF weight for BM25 (keyword) retriever. "
+                    "Increase to favour exact keyword matches over semantic similarity.",
+    )
 
     model_config = {
         "env_file": ".env",

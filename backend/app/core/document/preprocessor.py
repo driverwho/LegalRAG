@@ -335,6 +335,27 @@ class DocumentPreprocessor:
         # Rejoin with appropriate separators
         return "\n\n".join(processed_chunks), last_provider
 
+    @staticmethod
+    def _is_high_quality_md(doc: Document) -> bool:
+        """Return True for Markdown (.md) law documents.
+
+        MD-formatted files are treated as pre-formatted, high-quality input:
+
+        * Already well-structured — headings, articles and sections are encoded
+          in Markdown syntax (``#``, ``##``, ``第X条``).
+        * The regex cleaner's character-filter step would **destroy** that syntax
+          (``#``, ``*``, ``-``, ``[]`` etc. are stripped), breaking the
+          ``LegalParentChildSplitter`` that relies on ``#`` headings.
+        * LLM correction adds latency and cost with no quality benefit for
+          authoritative, pre-formatted legal source files.
+
+        Both the regex stage and the LLM stage are therefore skipped; the
+        document is passed through unchanged with ``high_quality_source=True``
+        stamped on its metadata.
+        """
+        source = doc.metadata.get("source", "")
+        return source.lower().endswith(".md")
+
     def preprocess(self, documents: List[Document]) -> List[Document]:
         """Process documents through the preprocessing pipeline.
 
@@ -359,6 +380,28 @@ class DocumentPreprocessor:
 
         for idx, doc in enumerate(documents, 1):
             try:
+                # ── Short-circuit: high-quality Markdown law files ────────────
+                # Skip both regex cleaning and LLM correction.
+                # Regex would strip Markdown syntax (#, *, -) that
+                # LegalParentChildSplitter needs; LLM adds no value here.
+                if self._is_high_quality_md(doc):
+                    metadata = dict(doc.metadata)
+                    metadata["preprocessor_version"] = "regex_v1"
+                    metadata["preprocessed"] = True
+                    metadata["preprocessed_by"] = "skipped_high_quality_md"
+                    metadata["preprocessed_at"] = datetime.now().isoformat()
+                    metadata["high_quality_source"] = True
+                    processed_docs.append(
+                        Document(page_content=doc.page_content, metadata=metadata)
+                    )
+                    logger.info(
+                        "Document %d/%d: MD law file detected — "
+                        "skipping regex + LLM preprocessing (high-quality source)",
+                        idx,
+                        len(documents),
+                    )
+                    continue
+
                 # Stage 1: Regex preprocessing
                 content = self._regex_preprocess(doc.page_content)
 

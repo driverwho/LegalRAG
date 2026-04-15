@@ -473,7 +473,7 @@ const sendMessage = async () => {
   let assistantMsgIndex = -1
 
   try {
-    const res = await fetch(`${API_BASE}/query/stream`, {
+    const res = await fetch(`${API_BASE}/query/stream/v2`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

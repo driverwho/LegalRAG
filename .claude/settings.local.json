@@ -22,7 +22,11 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/deps.py', encoding='utf-8'\\).read\\(\\)\\); print\\('deps.py: OK'\\)\")",
       "Bash(python -c \"from backend.app.core.document.legal_splitter import LegalParentChildSplitter, cn_to_int; print\\('Import OK'\\); print\\('cn_to_int tests:'\\); print\\(f'  一 = {cn_to_int\\(\\\\\"一\\\\\"\\)}'\\); print\\(f'  十二 = {cn_to_int\\(\\\\\"十二\\\\\"\\)}'\\); print\\(f'  二十三 = {cn_to_int\\(\\\\\"二十三\\\\\"\\)}'\\); print\\(f'  一百零三 = {cn_to_int\\(\\\\\"一百零三\\\\\"\\)}'\\); print\\(f'  42 = {cn_to_int\\(\\\\\"42\\\\\"\\)}'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/document/classifier.py', encoding='utf-8'\\).read\\(\\)\\); print\\('classifier.py: OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/tasks/document_tasks.py', encoding='utf-8'\\).read\\(\\)\\); print\\('document_tasks.py: OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/tasks/document_tasks.py', encoding='utf-8'\\).read\\(\\)\\); print\\('document_tasks.py: OK'\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(dir \"d:\\\\work_ai\\\\legalRAG\\\\backend\\\\app\\\\core\\\\retriever\")",
+      "Bash(dir \"d:\\\\work_ai\\\\legalRAG\\\\backend\\\\app\\\\core\\\\preprocessor\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('d:/work_ai/legalRAG/backend/app/core/retriever/stages.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }

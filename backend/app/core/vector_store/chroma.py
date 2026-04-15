@@ -56,6 +56,70 @@ class ChromaVectorStore(BaseVectorStore):
             for doc in documents
         ]
 
+    @staticmethod
+    def _to_chroma_filter(filter_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Convert an internal filter dict to ChromaDB's ``where`` clause format.
+
+        ChromaDB requires every condition to carry an explicit operator and
+        multiple conditions to be wrapped in ``$and``.  The internal format
+        produced by ``MetadataExtractor`` uses plain Python values:
+
+        Internal format            ChromaDB format
+        ─────────────────────────  ────────────────────────────────────────
+        ``"doc_type": "law"``      ``{"doc_type": {"$eq": "law"}}``
+        ``"doc_type": ["law"]``    ``{"doc_type": {"$in": ["law"]}}``
+        ``"region": ["全国"]``     ``{"region":   {"$in": ["全国"]}}``
+        ``"year_range": {          ``{"$and": [{"year": {"$gte": 2021}},``
+            "start": 2021,                    ``{"year": {"$lte": 2026}}]}``
+            "end": 2026}``
+        nested dicts / complex     skipped (unsupported by ChromaDB)
+        structures
+
+        Returns ``None`` when the converted result contains no usable clauses
+        (so callers can skip the filter entirely).
+        """
+        if not filter_dict:
+            return None
+
+        clauses: List[Dict[str, Any]] = []
+
+        for key, value in filter_dict.items():
+            # ── year_range: {"start": N, "end": M} ───────────────────
+            if key == "year_range" and isinstance(value, dict):
+                start = value.get("start")
+                end = value.get("end")
+                if isinstance(start, int):
+                    clauses.append({"year": {"$gte": start}})
+                if isinstance(end, int):
+                    clauses.append({"year": {"$lte": end}})
+                continue
+
+            # ── list value → $in ──────────────────────────────────────
+            if isinstance(value, list):
+                if not value:
+                    continue
+                # ChromaDB $in requires all elements to be the same scalar type
+                scalars = [v for v in value if isinstance(v, (str, int, float, bool))]
+                if scalars:
+                    clauses.append({key: {"$in": scalars}})
+                continue
+
+            # ── scalar value → $eq ────────────────────────────────────
+            if isinstance(value, (str, int, float, bool)):
+                clauses.append({key: {"$eq": value}})
+                continue
+
+            # ── skip complex / nested structures ──────────────────────
+            logger.debug(
+                "Skipping unsupported filter key '%s' (type=%s)", key, type(value).__name__
+            )
+
+        if not clauses:
+            return None
+        if len(clauses) == 1:
+            return clauses[0]
+        return {"$and": clauses}
+
     # ------------------------------------------------------------------
     # BaseVectorStore implementation
     # ------------------------------------------------------------------
@@ -145,10 +209,13 @@ class ChromaVectorStore(BaseVectorStore):
             )
             return []
 
+        # Convert internal filter format to ChromaDB's where-clause format
+        chroma_filter = self._to_chroma_filter(filter_dict) if filter_dict else None
+
         try:
-            if filter_dict:
+            if chroma_filter:
                 results = vs.similarity_search_with_score(
-                    query=query, k=k, filter=filter_dict
+                    query=query, k=k, filter=chroma_filter
                 )
             else:
                 results = vs.similarity_search_with_score(query=query, k=k)
@@ -186,15 +253,18 @@ class ChromaVectorStore(BaseVectorStore):
             logger.warning("No collections found in the vector store")
             return []
 
+        # Convert once; reuse across all collections
+        chroma_filter = self._to_chroma_filter(filter_dict) if filter_dict else None
+
         all_results: List[Tuple[Document, float]] = []
         for name in collection_names:
             vs = self._load_vectorstore(name)
             if vs is None:
                 continue
             try:
-                if filter_dict:
+                if chroma_filter:
                     results = vs.similarity_search_with_score(
-                        query=query, k=k, filter=filter_dict
+                        query=query, k=k, filter=chroma_filter
                     )
                 else:
                     results = vs.similarity_search_with_score(query=query, k=k)
@@ -209,8 +279,8 @@ class ChromaVectorStore(BaseVectorStore):
             except Exception as exc:
                 logger.error("Search in collection '%s' failed: %s", name, exc)
 
-        # Sort by score descending (higher score = more similar) and keep top-k
-        all_results.sort(key=lambda x: x[1], reverse=True)
+        # Sort by distance ascending (lower distance = more similar) and keep top-k
+        all_results.sort(key=lambda x: x[1])
         top_k = all_results[:k]
 
         logger.info(
