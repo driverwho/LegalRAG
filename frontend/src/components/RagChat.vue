@@ -66,7 +66,7 @@
                 :on-change="handleFileChange"
                 :show-file-list="true"
                 :multiple="true"
-                :limit="10"
+                :limit="1000"
                 :on-exceed="handleExceed"
                 ref="uploadRef"
               >
@@ -171,6 +171,17 @@
               <el-avatar :size="40" :icon="msg.role === 'user' ? User : Service" :class="msg.role" />
             </div>
             <div class="message-content">
+              <!-- 查询纠正提示 -->
+              <div v-if="msg.correctedQuery" class="query-correction-bar">
+                <el-icon><EditPen /></el-icon>
+                <span>已纠正为：<strong>{{ msg.correctedQuery }}</strong></span>
+              </div>
+              <!-- 查询分类标签 -->
+              <div v-if="msg.queryType && msg.queryType !== 'general'" class="query-type-tag">
+                <el-tag size="small" :type="msg.queryType === '法条' ? 'primary' : 'warning'" effect="plain" round>
+                  {{ msg.queryType === '法条' ? '法条检索' : '案例检索' }}
+                </el-tag>
+              </div>
               <!-- 进度状态：正在流式接收但内容尚未到达 -->
               <div v-if="msg.streaming && !msg.content" class="bubble status-bubble">
                 <el-icon class="spinning-icon"><Loading /></el-icon>
@@ -263,7 +274,7 @@ import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import {
   UploadFilled, User, Service, Position, Loading,
   Delete, Document, Search, ChatLineRound,
-  CollectionTag, ArrowDown, Plus, ArrowRight
+  CollectionTag, ArrowDown, Plus, ArrowRight, EditPen
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
@@ -497,7 +508,9 @@ const sendMessage = async () => {
       sources: [],
       showSources: false,
       streaming: true,
-      progressText: ''   // 由 progress 事件实时更新
+      progressText: '',       // 由 progress 事件实时更新
+      correctedQuery: null,   // 由 preprocessing_result 事件填充
+      queryType: null,        // 查询分类：法条 / 案例 / general
     })
 
     // 只有当前仍在该会话时才滚动
@@ -533,6 +546,13 @@ const sendMessage = async () => {
 
         if (event.type === 'progress') {
           lockedMessages[assistantMsgIndex].progressText = event.text
+        } else if (event.type === 'preprocessing_result') {
+          // 查询纠正 + 分类结果
+          const d = event.data
+          lockedMessages[assistantMsgIndex].queryType = d.query_type
+          if (d.corrected && d.corrected !== d.original) {
+            lockedMessages[assistantMsgIndex].correctedQuery = d.corrected
+          }
         } else if (event.type === 'sources') {
           lockedMessages[assistantMsgIndex].sources = event.sources
         } else if (event.type === 'chunk') {
@@ -1300,6 +1320,37 @@ onUnmounted(() => {
 }
 
 /* 状态气泡（连接中 / 检索中 / 生成中） */
+
+/* 查询纠正提示条 */
+.query-correction-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  margin-bottom: 8px;
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #409eff;
+  animation: slideDown 0.3s ease;
+}
+
+.query-correction-bar .el-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.query-correction-bar strong {
+  color: #303133;
+  font-weight: 600;
+}
+
+/* 查询分类标签 */
+.query-type-tag {
+  margin-bottom: 6px;
+}
+
 .status-bubble {
   display: flex !important;
   align-items: center;
