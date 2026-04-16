@@ -1,10 +1,10 @@
-"""Async search endpoints (v2) — agent-routed, true async/await.
+"""Async search endpoints (v2 + v3) — agent-routed, true async/await.
 
-v2 endpoints now delegate to ``LegalRouterAgent`` which:
-  1. Classifies the query intent
-  2. Selects and dispatches retrieval tools (law / case / both)
-  3. Chooses a per-type system prompt
-  4. Streams the LLM answer
+v2 endpoints delegate to ``LegalRouterAgent`` (static tool routing).
+v3 endpoints delegate to ``LegalReActAgent``  (LangGraph ReAct loop).
+
+Both share the same ``AsyncRAGPipeline``, vector store, and BM25 index;
+only the agent orchestration layer differs.
 
 The original ``AsyncRAGPipeline`` + ``AsyncContextualChatManager``
 search-only endpoint remains unchanged (no agent needed for raw search).
@@ -22,10 +22,12 @@ from backend.app.models.responses import QueryResponse, SearchResponse, SourceIt
 from backend.app.core.retriever.async_rag import AsyncRAGPipeline
 from backend.app.core.database.session_service import SessionService
 from backend.app.core.agent import LegalRouterAgent
+from backend.app.core.agent.react_agent import LegalReActAgent
 from backend.app.api.async_deps import (
     get_async_rag_pipeline,
     get_session_service,
     get_legal_router_agent,
+    get_legal_react_agent,
 )
 
 router = APIRouter()
@@ -187,5 +189,133 @@ async def search_v2(
                 score=r.score,
             )
             for r in hybrid.results
+        ],
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v3 — LangGraph ReAct Agent endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@router.post("/query/stream/v3")
+async def query_stream_v3(
+    body: SessionQueryRequest,
+    agent: LegalReActAgent = Depends(get_legal_react_agent),
+    session_service: SessionService = Depends(get_session_service),
+):
+    """ReAct agent streaming RAG (v3) — LLM-driven tool selection.
+
+    Compared to v2, the LLM autonomously decides which tools to call
+    and may perform multiple retrieval rounds before answering.
+
+    SSE event types (superset of v2)
+    --------------------------------
+    ``progress``              stage hint before data arrives
+    ``preprocessing_result``  corrected query + query type
+    ``tool_dispatch``         which tools the LLM chose (per iteration)
+    ``observation``           summarised tool result
+    ``sources``               all retrieved sources + stats
+    ``chunk``                 one LLM token chunk (final answer)
+    ``done``                  stream finished
+    ``error``                 unrecoverable failure
+    """
+
+    async def event_generator():
+        sources_data: list = []
+        answer_parts: list = []
+
+        try:
+            async for event in agent.run_stream(
+                query=body.question,
+                session_id=body.session_id,
+                k=body.k,
+            ):
+                if event["type"] == "sources":
+                    sources_data = event["sources"]
+                elif event["type"] == "chunk":
+                    answer_parts.append(event["text"])
+                yield _sse(event)
+
+        except Exception as exc:
+            logger.error("ReAct streaming pipeline error: %s", exc, exc_info=True)
+            yield _sse({"type": "error", "message": str(exc)})
+            return
+
+        # Persist to DB after stream completes (sync SQLAlchemy → thread pool)
+        if body.session_id:
+            full_answer = "".join(answer_parts)
+
+            def _persist():
+                session_service.add_message(
+                    session_id=body.session_id,
+                    role="user",
+                    content=body.question,
+                )
+                session_service.add_message(
+                    session_id=body.session_id,
+                    role="assistant",
+                    content=full_answer,
+                    sources=sources_data,
+                )
+
+            try:
+                await asyncio.to_thread(_persist)
+            except ValueError as exc:
+                logger.warning("Failed to persist streamed messages: %s", exc)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/query/v3", response_model=QueryResponse)
+async def query_v3(
+    body: SessionQueryRequest,
+    agent: LegalReActAgent = Depends(get_legal_react_agent),
+    session_service: SessionService = Depends(get_session_service),
+):
+    """ReAct agent non-streaming RAG (v3) — LLM-driven tool selection."""
+    result = await agent.run(
+        query=body.question,
+        session_id=body.session_id,
+        k=body.k,
+    )
+
+    if body.session_id:
+        def _persist():
+            session_service.add_message(
+                session_id=body.session_id, role="user", content=body.question
+            )
+            session_service.add_message(
+                session_id=body.session_id,
+                role="assistant",
+                content=result["answer"],
+                sources=result["sources"],
+            )
+        try:
+            await asyncio.to_thread(_persist)
+        except ValueError as exc:
+            logger.warning("Failed to persist messages: %s", exc)
+
+    sources_data = result["sources"]
+    return QueryResponse(
+        success=True,
+        question=body.question,
+        answer=result["answer"],
+        confidence=sources_data[0]["score"] if sources_data else 0.0,
+        question_type=result.get("preprocessing", {}).get("query_type", "general"),
+        sources=[
+            SourceItem(
+                content=s["content"],
+                metadata=s["metadata"],
+                score=s["score"],
+            )
+            for s in sources_data
         ],
     )

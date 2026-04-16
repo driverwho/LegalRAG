@@ -14,6 +14,7 @@ from backend.app.core.context import ContextManager, ContextConfig
 from backend.app.core.database.session_service import SessionService
 from backend.app.core.preprocessor.query_preprocessor import QueryPreprocessor
 from backend.app.core.agent import LegalRouterAgent
+from backend.app.core.agent.react_agent import LegalReActAgent
 from backend.app.core.agent.tools.law_search import LawSearchTool
 from backend.app.core.agent.tools.case_search import CaseSearchTool
 
@@ -123,7 +124,7 @@ def get_async_chat_manager() -> AsyncContextualChatManager:
 
 @lru_cache()
 def get_legal_router_agent() -> LegalRouterAgent:
-    """LegalRouterAgent singleton.
+    """LegalRouterAgent singleton (v2 — static routing).
 
     Wires together:
       - preprocessor  : query classification + correction + metadata
@@ -140,4 +141,34 @@ def get_legal_router_agent() -> LegalRouterAgent:
             "law_search": LawSearchTool(pipeline),
             "case_search": CaseSearchTool(pipeline),
         },
+    )
+
+
+@lru_cache()
+def get_legal_react_agent() -> LegalReActAgent:
+    """LegalReActAgent singleton (v3 — LangGraph ReAct loop).
+
+    Wires together:
+      - preprocessor    : query classification + correction
+      - context_manager : multi-turn history + token budgeting
+      - tools           : law_search + case_search (same AgentTool instances)
+      - LLM             : DashScope Qwen via ChatOpenAI (with tool_calls)
+
+    Uses the same underlying ``AsyncRAGPipeline`` as the v2 router agent,
+    so both can coexist and share caches / vector store state.
+    """
+    settings = get_settings()
+    pipeline = get_async_rag_pipeline()
+
+    return LegalReActAgent(
+        preprocessor=get_query_preprocessor(),
+        context_manager=get_async_context_manager(),
+        tools={
+            "law_search": LawSearchTool(pipeline),
+            "case_search": CaseSearchTool(pipeline),
+        },
+        api_key=settings.DASHSCOPE_API_KEY,
+        base_url=settings.LLM_BASE_URL,
+        model=settings.LLM_MODEL,
+        max_iterations=5,
     )
