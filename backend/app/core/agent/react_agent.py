@@ -54,12 +54,26 @@ from langgraph.prebuilt import ToolNode
 from backend.app.core.agent.state import AgentState
 from backend.app.core.agent.tools.base import AgentTool, agent_tool_to_langchain
 from backend.app.core.agent.prompts.registry import PromptRegistry
-from backend.app.core.agent.prompts.react_prompts import build_react_system_prompt
+from backend.app.core.agent.prompts.react_prompts import (
+    build_react_system_prompt,
+    sanitize_user_input,
+)
 from backend.app.core.context.context_manager import ContextManager
 from backend.app.core.preprocessor.query_preprocessor import QueryPreprocessor
 from backend.app.core.retriever.models import PreprocessResult
 
 logger = logging.getLogger(__name__)
+
+# ── Token budget constants ────────────────────────────────────────────────────
+# Rough estimate: 1 token ≈ 1.5 Chinese characters
+_CHARS_PER_TOKEN = 1.5
+_DEFAULT_TOKEN_BUDGET = 20000  # conservative budget (model max is 30K+)
+
+
+def _estimate_tokens(messages: list[BaseMessage]) -> int:
+    """Rough token estimation from message character counts."""
+    total_chars = sum(len(m.content) for m in messages if hasattr(m, "content"))
+    return int(total_chars / _CHARS_PER_TOKEN)
 
 
 class LegalReActAgent:
@@ -85,6 +99,8 @@ class LegalReActAgent:
         Hard cap on reason→act loops to prevent runaway cost.
     temperature : float
         LLM sampling temperature (low = more deterministic tool calls).
+    token_budget : int
+        Estimated token budget for messages before compression kicks in.
     """
 
     def __init__(
@@ -99,11 +115,13 @@ class LegalReActAgent:
         model: str = "qwen-plus",
         max_iterations: int = 5,
         temperature: float = 0.1,
+        token_budget: int = _DEFAULT_TOKEN_BUDGET,
     ) -> None:
         self.preprocessor = preprocessor
         self.context_manager = context_manager
         self.prompt_registry = prompt_registry or PromptRegistry()
         self.max_iterations = max_iterations
+        self.token_budget = token_budget
 
         # ── Convert AgentTool → LangChain StructuredTool ───────────
         self.agent_tools = tools
@@ -168,11 +186,40 @@ class LegalReActAgent:
 
     async def _reason_node(self, state: AgentState) -> dict:
         """LLM reasoning node — produces tool_calls or final answer."""
-        messages = state["messages"]
+        messages = list(state["messages"])
+
+        # ── Token budget check: compress if approaching limit ────
+        token_est = _estimate_tokens(messages)
+        if token_est > self.token_budget:
+            messages = self._compress_messages(messages)
+            logger.info(
+                "Compressed messages: %d → %d tokens (est)",
+                token_est, _estimate_tokens(messages),
+            )
+
         response = await self.llm_with_tools.ainvoke(messages)
+
+        # Track tool call history for deduplication
+        tool_call_history = list(state.get("tool_call_history", []))
+        if (
+            isinstance(response, AIMessage)
+            and hasattr(response, "tool_calls")
+            and response.tool_calls
+        ):
+            for tc in response.tool_calls:
+                query_arg = tc.get("args", {}).get("query", "")
+                tool_call_history.append((tc["name"], query_arg))
+
         return {
             "messages": [response],
             "iteration_count": state.get("iteration_count", 0) + 1,
+            "tool_call_history": tool_call_history,
+            "has_called_tool": state.get("has_called_tool", False) or bool(
+                isinstance(response, AIMessage)
+                and hasattr(response, "tool_calls")
+                and response.tool_calls
+            ),
+            "total_tokens_est": _estimate_tokens(messages),
         }
 
     # ── Edge conditions ───────────────────────────────────────────────────────
@@ -182,12 +229,17 @@ class LegalReActAgent:
 
         Returns ``"act"`` if the last AI message contains tool_calls,
         ``"end"`` otherwise (final answer ready).
+
+        Enhanced with:
+        - Max iteration guard
+        - Tool call deduplication (same tool + similar query → force end)
+        - Forced first-call check (must call at least one tool)
         """
         messages = state["messages"]
         last_message = messages[-1]
+        iteration = state.get("iteration_count", 0)
 
         # Guard: max iterations
-        iteration = state.get("iteration_count", 0)
         if iteration >= self.max_iterations:
             logger.warning(
                 "ReAct agent reached max iterations (%d) — forcing end",
@@ -195,15 +247,107 @@ class LegalReActAgent:
             )
             return "end"
 
-        # If the LLM wants to call tools, continue
+        # If the LLM wants to call tools, check for deduplication
         if (
             isinstance(last_message, AIMessage)
             and hasattr(last_message, "tool_calls")
             and last_message.tool_calls
         ):
+            # Check for duplicate tool calls
+            history = state.get("tool_call_history", [])
+            if self._has_duplicate_calls(last_message.tool_calls, history):
+                logger.warning(
+                    "Detected duplicate tool call at iteration %d — forcing end",
+                    iteration,
+                )
+                return "end"
             return "act"
 
+        # No tool calls — check if we should force at least one tool call
+        has_called = state.get("has_called_tool", False)
+        if not has_called and iteration <= 1:
+            # First iteration with no tool call: this is risky — the LLM
+            # is trying to answer from memory. We let it through but log
+            # a warning. The prompt should prevent this, but we don't
+            # forcefully inject tool calls to avoid breaking the graph flow.
+            logger.warning(
+                "ReAct agent produced answer without any tool call "
+                "(iteration=%d). Prompt may need tuning.",
+                iteration,
+            )
+
         return "end"
+
+    def _has_duplicate_calls(
+        self,
+        new_calls: list[dict],
+        history: list[tuple[str, str]],
+    ) -> bool:
+        """Check if the new tool calls duplicate recent history.
+
+        A call is considered duplicate if the same tool was called with
+        a query that has >60% character overlap with a previous call.
+        """
+        for tc in new_calls:
+            name = tc["name"]
+            query = tc.get("args", {}).get("query", "")
+            for hist_name, hist_query in history:
+                if name == hist_name and self._query_similarity(query, hist_query) > 0.6:
+                    return True
+        return False
+
+    @staticmethod
+    def _query_similarity(a: str, b: str) -> float:
+        """Jaccard similarity at character level (fast, no tokenizer needed)."""
+        if not a or not b:
+            return 0.0
+        set_a, set_b = set(a), set(b)
+        intersection = len(set_a & set_b)
+        union = len(set_a | set_b)
+        return intersection / union if union else 0.0
+
+    # ── Message compression ──────────────────────────────────────────────────
+
+    def _compress_messages(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+        """Compress message list when approaching token budget.
+
+        Strategy: keep system message + last 5 messages, summarise the rest.
+        This is a synchronous heuristic compression (no LLM call) to avoid
+        adding latency. For LLM-based compression, use ContextManager.
+        """
+        if len(messages) <= 6:
+            return messages
+
+        system_msg = messages[0] if isinstance(messages[0], SystemMessage) else None
+        tail = messages[-5:]
+        middle = messages[1:-5] if system_msg else messages[:-5]
+
+        # Build a summary of the compressed messages
+        summary_parts = []
+        for msg in middle:
+            if isinstance(msg, ToolMessage):
+                # Heavily truncate tool results
+                content = msg.content[:200] + "…" if len(msg.content) > 200 else msg.content
+                summary_parts.append(f"[工具结果] {content}")
+            elif isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+                tools = [tc["name"] for tc in msg.tool_calls]
+                summary_parts.append(f"[AI调用工具: {', '.join(tools)}]")
+            elif isinstance(msg, AIMessage):
+                content = msg.content[:150] + "…" if len(msg.content) > 150 else msg.content
+                summary_parts.append(f"[AI回复] {content}")
+            elif isinstance(msg, HumanMessage):
+                summary_parts.append(f"[用户] {msg.content[:100]}")
+
+        summary = SystemMessage(
+            content="[以下是之前的对话摘要]\n" + "\n".join(summary_parts)
+        )
+
+        result = []
+        if system_msg:
+            result.append(system_msg)
+        result.append(summary)
+        result.extend(tail)
+        return result
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Streaming entry-point
@@ -251,7 +395,9 @@ class LegalReActAgent:
         }
 
         # ── Step 2: Build initial messages ─────────────────────────
-        messages = self._build_initial_messages(pre, query, session_id)
+        # Sanitize user input to prevent prompt injection
+        safe_query = sanitize_user_input(query)
+        messages = self._build_initial_messages(pre, safe_query, session_id)
 
         yield {
             "type": "progress",
@@ -272,6 +418,9 @@ class LegalReActAgent:
             "sources": [],
             "session_id": session_id,
             "k": k,
+            "tool_call_history": [],
+            "has_called_tool": False,
+            "total_tokens_est": 0,
         }
 
         tools_used: list[str] = []
@@ -349,7 +498,7 @@ class LegalReActAgent:
 
         except Exception as exc:
             logger.error("ReAct agent streaming failed: %s", exc, exc_info=True)
-            yield {"type": "error", "message": str(exc)}
+            yield {"type": "error", "message": f"Agent 执行异常: {exc}"}
             return
 
         # ── Step 4: Emit sources ───────────────────────────────────

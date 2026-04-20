@@ -24,7 +24,13 @@ class CaseSearchTool(AgentTool):
     """Search for judicial case chunks (案例)."""
 
     name = "case_search"
-    description = "在司法判例知识库中检索案例、裁判文书，返回相关判例。"
+    description = (
+        "在司法判例知识库中检索案例、裁判文书，返回相关判例。\n"
+        "适用场景：查找类似案例、裁判观点、法律适用标准、实务操作。\n"
+        "不适用场景：查找法律条文定义（应使用 law_search）。\n"
+        "参数：query 为搜索关键词（建议包含案由或关键事实，如"
+        "\"加班费 纠纷\"），k 为返回结果数量（1-20，默认5）。"
+    )
 
     def __init__(self, pipeline) -> None:
         self._pipeline = pipeline

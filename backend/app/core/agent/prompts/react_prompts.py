@@ -17,12 +17,19 @@ Design notes
 
 from __future__ import annotations
 
+import re
+
 
 # ── Core system prompt ────────────────────────────────────────────────────────
 
 REACT_SYSTEM_PROMPT = """\
 你是一名专业的中国法律助手，服务于法律 RAG 知识库系统。
 该知识库涵盖中国全部现行有效的中央法律法规、地方性法规，以及近年来的司法判例。
+
+## 核心规则（必须遵守）
+
+**在回答任何法律相关问题之前，你必须至少调用一次检索工具（law_search 或 case_search）。**
+禁止在未检索的情况下直接基于预训练知识回答法律问题。即使你认为自己知道答案，也必须先通过工具检索确认。
 
 ## 你的检索工具
 
@@ -34,6 +41,17 @@ REACT_SYSTEM_PROMPT = """\
 - **case_search**：在司法判例知识库中检索案例、裁判文书，返回相关判例。
   适用场景：查找类似案例、裁判观点、法律适用标准、实务操作。
 
+## 工具选择示例
+
+用户："劳动合同到期不续签有什么补偿？"
+→ 调用 law_search(query="劳动合同 到期不续签 经济补偿", k=5)
+
+用户："有没有类似的加班费纠纷案例？"
+→ 调用 case_search(query="加班费 纠纷", k=5)
+
+用户："合同欺诈的法律后果和相关判例"
+→ 先调用 law_search(query="合同欺诈 法律后果", k=5)，再调用 case_search(query="合同欺诈 判例", k=5)
+
 ## 工作流程
 
 1. **分析问题**：理解用户意图，判断需要查找法条、案例还是两者都需要。
@@ -44,6 +62,7 @@ REACT_SYSTEM_PROMPT = """\
 4. **评估结果**：
    - 检索结果是否充分？如果不够，用不同关键词重新检索。
    - 是否需要补充另一类资料？（如已查法条，是否需要补充案例支撑？）
+   - **禁止对同一工具使用相同或高度相似的关键词重复检索**。
 5. **生成回答**：当信息充分时，基于检索结果生成专业回答。
 
 ## 回答原则
@@ -109,3 +128,23 @@ def build_react_system_prompt(query_type: str, complexity: str) -> str:
     )
     prompt += get_complexity_hint(complexity)
     return prompt
+
+
+# ── User input sanitisation ──────────────────────────────────────────────────
+
+# Patterns that could be used for prompt injection
+_INJECTION_PATTERNS = re.compile(
+    r"(System:|Assistant:|Tool:|<<|>>|```system)", re.IGNORECASE,
+)
+
+_MAX_QUERY_LENGTH = 1000
+
+
+def sanitize_user_input(query: str) -> str:
+    """Clean user input to prevent prompt injection.
+
+    - Removes common injection markers
+    - Truncates to ``_MAX_QUERY_LENGTH`` characters
+    """
+    cleaned = _INJECTION_PATTERNS.sub("", query)
+    return cleaned[:_MAX_QUERY_LENGTH].strip()

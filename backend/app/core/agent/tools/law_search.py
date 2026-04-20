@@ -24,7 +24,14 @@ class LawSearchTool(AgentTool):
     """Search for statute / regulation chunks (法条)."""
 
     name = "law_search"
-    description = "在法律法规知识库中检索法条、条文，返回相关法律规定。"
+    description = (
+        "在法律法规知识库中检索法条、条文，返回相关法律规定。\n"
+        "适用场景：查找具体法条、法律定义、构成要件、法律程序规定、"
+        "法律概念解释。\n"
+        "不适用场景：查找具体案例或判决（应使用 case_search）。\n"
+        "参数：query 为搜索关键词（建议包含法律领域名称，如"
+        "\"劳动合同法 解除条件\"），k 为返回结果数量（1-20，默认5）。"
+    )
 
     def __init__(self, pipeline) -> None:
         self._pipeline = pipeline

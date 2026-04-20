@@ -8,6 +8,9 @@ Two agent implementations are available:
 - ``LegalReActAgent`` (v3): LangGraph ReAct loop.
   LLM-driven tool selection, multi-round reasoning, self-correction.
 
+Both share the same ``run_stream()`` / ``run()`` interface.  The active
+agent is selected via the ``AGENT_VERSION`` setting (default: ``"v3"``).
+
 Public API::
 
     # v2 — static routing

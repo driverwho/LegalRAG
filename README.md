@@ -5,6 +5,8 @@
 [![Vue.js](https://img.shields.io/badge/Vue.js-3.5+-4FC08D.svg?logo=vue.js&logoColor=white)](https://vuejs.org)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-0.5+-FF6F00.svg)](https://www.trychroma.com)
 [![PaddleOCR](https://img.shields.io/badge/PaddleOCR-3.0+-2B6CB0.svg)](https://github.com/PaddlePaddle/PaddleOCR)
+[![LangChain](https://img.shields.io/badge/LangChain-0.3+-1C3C3C.svg?logo=langchain&logoColor=white)](https://www.langchain.com)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-FF6B35.svg)](https://langchain-ai.github.io/langgraph/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 一个面向法律领域的** Agent 驱动 RAG (Retrieval-Augmented Generation) 系统**，支持意图识别、混合检索、流式输出和多级 LLM 故障转移。
@@ -38,7 +40,7 @@
 - **元数据提取**：自动提取时间、地区、法院等过滤条件
 - **动态工具路由**：根据问题复杂度选择检索策略
 
-#### v3 — ReAct 推理循环 (`LegalReActAgent`) ⚠️ 待正式引入
+#### v3 — ReAct 推理循环 (`LegalReActAgent`)
 
 基于 **LangGraph** 的 ReAct (Reasoning + Acting) Agent，由 LLM 自主决定工具调用，支持多轮推理与自我纠错：
 
@@ -240,7 +242,7 @@ python -m backend.app.core.evaluation.run_evaluation \
 │   Vue.js    │◄────►│  FastAPI                                         │
 │  Frontend   │      │  ├─ v1: 传统 RAG (RAGPipeline)                   │
 │             │      │  ├─ v2: Agent 静态路由 (LegalRouterAgent)         │
-└─────────────┘      │  └─ v3: ReAct 推理循环 (LegalReActAgent) ⚠️待引入│
+└─────────────┘      │  └─ v3: ReAct 推理循环 (LegalReActAgent)│
                      └──────────────┬───────────────────────────────────┘
                                     │
         ┌───────────────────────────┼───────────────────────────┐
@@ -268,7 +270,7 @@ python -m backend.app.core.evaluation.run_evaluation \
 |------|--------|------|
 | **API 层** | FastAPI + Pydantic | 请求校验、依赖注入、路由管理 |
 | **Agent 层 (v2)** | LegalRouterAgent | 静态意图识别、工具路由、流程编排 |
-| **Agent 层 (v3)** | LegalReActAgent + LangGraph ⚠️待引入 | ReAct 推理循环、LLM 自主工具选择、多轮推理 |
+| **Agent 层 (v3)** | LegalReActAgent + LangGraph | ReAct 推理循环、LLM 自主工具选择、多轮推理 |
 | **检索层** | ChromaDB + BM25Okapi | 向量存储、关键词索引、混合检索 |
 | **LLM 层** | AsyncOpenAI | 异步生成、流式输出、故障转移 |
 | **上下文层** | ContextManager | Token 预算、历史压缩、会话管理 |
@@ -367,8 +369,7 @@ LegalRAG/
 │   │   ├── core/
 │   │   │   ├── agent/           # Agent 核心
 │   │   │   │   ├── router.py    # LegalRouterAgent (v2 静态路由)
-│   │   │   │   ├── react_agent.py # LegalReActAgent (v3 ReAct) ⚠️待引入
-│   │   │   │   ├── state.py     # AgentState (LangGraph 状态定义)
+│   │   │   │   ├── react_agent.py # LegalReActAgent (v3 ReAct) │   │   │   │   ├── state.py     # AgentState (LangGraph 状态定义)
 │   │   │   │   ├── tools/       # 检索工具 (法条/案例)
 │   │   │   │   │   └── base.py  # AgentTool 基类 + LangChain 适配
 │   │   │   │   └── prompts/     # Prompt 模板
@@ -418,7 +419,7 @@ MIT License
 
 ### 功能扩展
 
-- [x] **多轮推理 Agent**：v3 `LegalReActAgent` 已实现基于 LangGraph 的 ReAct 推理循环，支持 LLM 自主多轮工具调用和自我纠错（⚠️ 待正式引入生产环境）
+- [x] **多轮推理 Agent**：v3 `LegalReActAgent` 已实现基于 LangGraph 的 ReAct 推理循环，支持 LLM 自主多轮工具调用和自我纠错
 - [ ] **用户反馈闭环**：引入 thumbs up/down 机制，收集用户对检索结果和回答质量的反馈，用于持续优化检索阈值和 prompt
 - [ ] **知识图谱增强**：构建法律条文间的引用关系图（"本法第 X 条"→ 自动关联），支持图谱辅助检索
 
@@ -431,4 +432,4 @@ MIT License
 ---
 
 **技术栈**: FastAPI + Vue3 + ChromaDB + LangChain + LangGraph + BM25Okapi + PaddleOCR + SQLite + Celery/Redis
-**架构版本**: v2.0 (Agent-driven) / v3.0 (ReAct Agent — 待正式引入)
+**架构版本**: v3.0 (ReAct Agent, 默认) / v2.0 (Agent-driven, 可配置回退)

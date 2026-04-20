@@ -29,6 +29,21 @@ class Settings(BaseSettings):
         default="qwen3-max", description="LLM model name (max tier)"
     )
 
+    # Agent
+    AGENT_VERSION: str = Field(
+        default="v3",
+        description="Active agent version: 'v2' (static routing) or 'v3' (ReAct). "
+                    "Controls which agent is used by the unified /query/stream endpoint.",
+    )
+    REACT_MAX_ITERATIONS: int = Field(
+        default=5,
+        description="Maximum reason→act loop iterations for the v3 ReAct agent",
+    )
+    REACT_TOKEN_BUDGET: int = Field(
+        default=20000,
+        description="Estimated token budget for ReAct agent messages before compression",
+    )
+
     # Moonshot / Kimi
     MOONSHOT_API_KEY: str = Field(default="", description="Moonshot API key")
     MOONSHOT_BASE_URL: str = Field(

@@ -170,5 +170,21 @@ def get_legal_react_agent() -> LegalReActAgent:
         api_key=settings.DASHSCOPE_API_KEY,
         base_url=settings.LLM_BASE_URL,
         model=settings.LLM_MODEL,
-        max_iterations=5,
+        max_iterations=settings.REACT_MAX_ITERATIONS,
+        token_budget=settings.REACT_TOKEN_BUDGET,
     )
+
+
+def get_legal_agent():
+    """Unified agent factory — returns v2 or v3 based on AGENT_VERSION setting.
+
+    This is the primary dependency for API endpoints. It reads the
+    ``AGENT_VERSION`` setting at call time (not cached) so the version
+    can be changed at runtime via environment variable without restart.
+
+    Both agent types share the same ``run_stream()`` / ``run()`` interface.
+    """
+    settings = get_settings()
+    if settings.AGENT_VERSION == "v3":
+        return get_legal_react_agent()
+    return get_legal_router_agent()

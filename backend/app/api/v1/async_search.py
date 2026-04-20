@@ -1,7 +1,8 @@
-"""Async search endpoints (v2 + v3) — agent-routed, true async/await.
+"""Async search endpoints (v2 + v3 + unified) — agent-routed, true async/await.
 
 v2 endpoints delegate to ``LegalRouterAgent`` (static tool routing).
 v3 endpoints delegate to ``LegalReActAgent``  (LangGraph ReAct loop).
+Unified endpoints delegate to whichever agent is active via ``AGENT_VERSION``.
 
 Both share the same ``AsyncRAGPipeline``, vector store, and BM25 index;
 only the agent orchestration layer differs.
@@ -28,6 +29,7 @@ from backend.app.api.async_deps import (
     get_session_service,
     get_legal_router_agent,
     get_legal_react_agent,
+    get_legal_agent,
 )
 
 router = APIRouter()
@@ -281,6 +283,126 @@ async def query_v3(
     session_service: SessionService = Depends(get_session_service),
 ):
     """ReAct agent non-streaming RAG (v3) — LLM-driven tool selection."""
+    result = await agent.run(
+        query=body.question,
+        session_id=body.session_id,
+        k=body.k,
+    )
+
+    if body.session_id:
+        def _persist():
+            session_service.add_message(
+                session_id=body.session_id, role="user", content=body.question
+            )
+            session_service.add_message(
+                session_id=body.session_id,
+                role="assistant",
+                content=result["answer"],
+                sources=result["sources"],
+            )
+        try:
+            await asyncio.to_thread(_persist)
+        except ValueError as exc:
+            logger.warning("Failed to persist messages: %s", exc)
+
+    sources_data = result["sources"]
+    return QueryResponse(
+        success=True,
+        question=body.question,
+        answer=result["answer"],
+        confidence=sources_data[0]["score"] if sources_data else 0.0,
+        question_type=result.get("preprocessing", {}).get("query_type", "general"),
+        sources=[
+            SourceItem(
+                content=s["content"],
+                metadata=s["metadata"],
+                score=s["score"],
+            )
+            for s in sources_data
+        ],
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Unified endpoints — auto-select v2 or v3 based on AGENT_VERSION setting
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@router.post("/query/stream")
+async def query_stream_unified(
+    body: SessionQueryRequest,
+    agent=Depends(get_legal_agent),
+    session_service: SessionService = Depends(get_session_service),
+):
+    """Unified streaming RAG — delegates to v2 or v3 based on AGENT_VERSION.
+
+    This is the **recommended endpoint** for new integrations. It uses
+    whichever agent version is configured in ``AGENT_VERSION`` (default: v3).
+
+    SSE event types are a superset of v2, so frontends that handle v2
+    events will work transparently with v3.
+    """
+
+    async def event_generator():
+        sources_data: list = []
+        answer_parts: list = []
+
+        try:
+            async for event in agent.run_stream(
+                query=body.question,
+                session_id=body.session_id,
+                k=body.k,
+            ):
+                if event["type"] == "sources":
+                    sources_data = event["sources"]
+                elif event["type"] == "chunk":
+                    answer_parts.append(event["text"])
+                yield _sse(event)
+
+        except Exception as exc:
+            logger.error("Unified streaming pipeline error: %s", exc, exc_info=True)
+            yield _sse({"type": "error", "message": str(exc)})
+            return
+
+        # Persist to DB after stream completes
+        if body.session_id:
+            full_answer = "".join(answer_parts)
+
+            def _persist():
+                session_service.add_message(
+                    session_id=body.session_id,
+                    role="user",
+                    content=body.question,
+                )
+                session_service.add_message(
+                    session_id=body.session_id,
+                    role="assistant",
+                    content=full_answer,
+                    sources=sources_data,
+                )
+
+            try:
+                await asyncio.to_thread(_persist)
+            except ValueError as exc:
+                logger.warning("Failed to persist streamed messages: %s", exc)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/query", response_model=QueryResponse)
+async def query_unified(
+    body: SessionQueryRequest,
+    agent=Depends(get_legal_agent),
+    session_service: SessionService = Depends(get_session_service),
+):
+    """Unified non-streaming RAG — delegates to v2 or v3 based on AGENT_VERSION."""
     result = await agent.run(
         query=body.question,
         session_id=body.session_id,

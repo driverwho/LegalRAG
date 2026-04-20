@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # ── Max chars per result & per observation (token budget control) ──────────────
 _CONTENT_LIMIT = 800
-_MAX_RESULTS_IN_OBSERVATION = 8
+_MAX_RESULTS_IN_OBSERVATION = 5
 
 
 # ── Pydantic input schema for LangChain tool ──────────────────────────────────
@@ -41,7 +41,10 @@ class SearchInput(BaseModel):
     """Input schema shared by all search tools."""
 
     query: str = Field(description="搜索查询关键词或自然语言问题")
-    k: int = Field(default=5, description="返回结果数量，默认为5")
+    k: int = Field(
+        default=5, ge=1, le=20,
+        description="返回结果数量（1-20），默认为5",
+    )
 
 
 @dataclass
@@ -168,9 +171,15 @@ def agent_tool_to_langchain(tool: AgentTool) -> StructuredTool:
         try:
             tr = await tool.run_async(query, k=k)
             return _format_observation(tool.name, tr)
+        except ConnectionError as exc:
+            logger.error("LangChain bridge: tool %s connection failed: %s", tool.name, exc)
+            return f"[{tool.name}] 检索服务暂时不可用，请尝试使用不同关键词重新检索。"
+        except ValueError as exc:
+            logger.warning("LangChain bridge: tool %s query error: %s", tool.name, exc)
+            return f"[{tool.name}] 查询参数错误: {exc}。建议修改关键词后重试。"
         except Exception as exc:
-            logger.error("LangChain bridge: tool %s failed: %s", tool.name, exc)
-            return f"[{tool.name}] 工具执行失败: {exc}"
+            logger.error("LangChain bridge: tool %s failed: %s", tool.name, exc, exc_info=True)
+            return f"[{tool.name}] 工具执行失败，请尝试其他关键词重新检索。"
 
     return StructuredTool(
         name=tool.name,
